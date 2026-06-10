@@ -1,0 +1,2349 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HR Portal — Luzie Group Digital</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+<!-- Firebase SDK -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, setDoc, onSnapshot, getDoc, collection, getDocs, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  // Auth via Firestore (tidak pakai Firebase Authentication)
+
+  // ═══════════════════════════════════════════════════
+  // 🔧 KONFIGURASI FIREBASE — JANGAN DIUBAH
+  // ═══════════════════════════════════════════════════
+  const firebaseConfig = {
+    apiKey:            "AIzaSyC5SrwItHk2jm1JDXjt-LwwgIrImux8YPA",
+    authDomain:        "hr-portal-luzie-e9baa.firebaseapp.com",
+    databaseURL:       "https://hr-portal-luzie-e9baa-default-rtdb.asia-southeast1.firebaseio.com",
+    projectId:         "hr-portal-luzie-e9baa",
+    storageBucket:     "hr-portal-luzie-e9baa.firebasestorage.app",
+    messagingSenderId: "853792602894",
+    appId:             "1:853792602894:web:952c6b5603874a6c52b55f",
+    measurementId:     "G-V0K7N90LZQ"
+  };
+  // ═══════════════════════════════════════════════════
+
+  const app  = initializeApp(firebaseConfig);
+  const db   = getFirestore(app);
+  const DOC_REF = doc(db, "hrportal", "data");
+
+  // ── CATATAN FIRESTORE RULES ──
+  // Pastikan Firestore Security Rules mengizinkan public read untuk collection hrportal:
+  // rules_version = '2';
+  // service cloud.firestore {
+  //   match /databases/{database}/documents {
+  //     match /hrportal/{document} {
+  //       allow read: if true;           // siapa saja bisa baca konten portal
+  //       allow write: if false;         // write hanya via Admin SDK / trusted client
+  //     }
+  //     match /users/{userId} {
+  //       allow read, write: if true;    // untuk auth custom
+  //     }
+  //   }
+  // }
+
+  // ── Expose ke window ──
+  window._firebaseReady = false;
+  window._db     = db;
+  window._docRef = DOC_REF;
+  window._fbSetDoc      = setDoc;
+  window._fbGetDoc      = getDoc;
+  window._fbOnSnapshot  = onSnapshot;
+  window._fbCollection  = collection;
+  window._fbGetDocs     = getDocs;
+  window._fbDeleteDoc   = deleteDoc;
+  window._fbDoc         = doc;
+
+  // ── Firestore-based Auth ──
+  // Hash password sederhana (SHA-256 via Web Crypto)
+  window._hashPassword = async (password) => {
+    const msgBuffer = new TextEncoder().encode(password);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  window._fbSignIn = async (email, password) => {
+    const { collection, query, where, getDocs: gd } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+    const hashed = await window._hashPassword(password);
+    const q = query(collection(db, "users"), where("email", "==", email.toLowerCase()));
+    const snap = await gd(q);
+    if (snap.empty) throw { code: 'auth/user-not-found' };
+    const userDoc = snap.docs[0];
+    const userData = userDoc.data();
+    if (userData.password !== hashed) throw { code: 'auth/wrong-password' };
+    if (userData.disabled) throw { code: 'auth/user-disabled' };
+    window._currentUser = { uid: userDoc.id, email: userData.email, name: userData.name, role: userData.role, dept: userData.dept };
+    window._isLoggedIn = true;
+    window._isAdmin    = userData.role === 'admin';
+    // Simpan sesi di sessionStorage
+    sessionStorage.setItem('hrportal_session', JSON.stringify(window._currentUser));
+    if (typeof onAuthReady === 'function') onAuthReady();
+  };
+
+  window._fbSignOut = async () => {
+    sessionStorage.removeItem('hrportal_session');
+    window._currentUser = null;
+    window._isLoggedIn  = false;
+    window._isAdmin     = false;
+    if (typeof onAuthStateLoggedOut === 'function') onAuthStateLoggedOut();
+  };
+
+  window._fbCreateUser = async (email, password, name, role, dept) => {
+    const hashed = await window._hashPassword(password);
+    const uid = 'usr_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+    await setDoc(doc(db, "users", uid), {
+      email: email.toLowerCase(), password: hashed,
+      name: name || email.split('@')[0], role: role || 'employee',
+      dept: dept || '-', createdAt: new Date().toISOString(), disabled: false
+    });
+    return { uid };
+  };
+
+  window._fbUpdateUserPassword = async (uid, newPassword) => {
+    const hashed = await window._hashPassword(newPassword);
+    // Gunakan setDoc dengan merge:true — tidak perlu import dinamis
+    await setDoc(doc(db, "users", uid), { password: hashed }, { merge: true });
+  };
+
+  // ── Cek sesi tersimpan saat load ──
+  const savedSession = sessionStorage.getItem('hrportal_session');
+  if (savedSession) {
+    try {
+      const sess = JSON.parse(savedSession);
+      // Verifikasi sesi masih valid di Firestore
+      getDoc(doc(db, "users", sess.uid)).then(snap => {
+        if (snap.exists() && !snap.data().disabled) {
+          window._currentUser = { uid: sess.uid, ...snap.data() };
+          delete window._currentUser.password;
+          window._isLoggedIn = true;
+          window._isAdmin    = snap.data().role === 'admin';
+          if (typeof onAuthReady === 'function') onAuthReady();
+        } else {
+          sessionStorage.removeItem('hrportal_session');
+          if (typeof onAuthStateLoggedOut === 'function') onAuthStateLoggedOut();
+        }
+      }).catch(() => {
+        sessionStorage.removeItem('hrportal_session');
+      });
+    } catch(e) {
+      sessionStorage.removeItem('hrportal_session');
+    }
+  } else {
+    setTimeout(() => {
+      if (typeof onAuthStateLoggedOut === 'function') onAuthStateLoggedOut();
+    }, 300);
+  }
+
+  // ── Real-time content listener ──
+  // Queue untuk data yang datang sebelum main script siap
+  window._pendingRemoteData = null;
+
+  // Gunakan callback window._onRemoteData agar bisa update appData lokal di non-module script
+  onSnapshot(DOC_REF, (snap) => {
+    if (snap.exists()) {
+      const snapData = snap.data();
+      const remote = snapData.payload;
+      const remoteTs = snapData.updatedAt || '';
+      if (remote) {
+        const apiKey = localStorage.getItem('hrportal_apikey') || '';
+        localStorage.setItem('hrportal_data', remote);
+        localStorage.setItem('hrportal_ts', remoteTs);
+        if (apiKey) localStorage.setItem('hrportal_apikey', apiKey);
+        // Update via callback — agar appData lokal di main script ikut ter-update
+        if (typeof window._onRemoteData === 'function') {
+          window._onRemoteData(remote);
+        } else {
+          // Main script belum siap — simpan ke queue, akan diproses saat siap
+          window._pendingRemoteData = remote;
+        }
+        showFbStatus('synced');
+      }
+    } else {
+      // Dokumen belum ada di Firestore — push data lokal, tapi tunggu main script siap
+      const tryPush = () => {
+        if (window.appData || localStorage.getItem('hrportal_data')) {
+          window._fbPushToCloud && window._fbPushToCloud();
+        } else {
+          setTimeout(tryPush, 300); // coba lagi 300ms kemudian
+        }
+      };
+      setTimeout(tryPush, 500);
+    }
+    window._firebaseReady = true;
+  }, (err) => {
+    console.warn('[HR Portal] Firebase error:', err.message, err.code);
+    showFbStatus('error', err.message);
+    window._firebaseReady = false;
+  });
+
+  // ── Push konten ke Firestore ──
+  window._fbPushToCloud = async function() {
+    try {
+      // Ambil data: prioritas window.appData, fallback ke localStorage
+      let dataToSave = window.appData;
+      if (!dataToSave) {
+        const local = localStorage.getItem('hrportal_data');
+        if (!local) { console.warn('[HR Portal] Tidak ada data untuk di-push'); return; }
+        dataToSave = JSON.parse(local);
+      }
+      // Buat salinan bersih — hapus credentials agar tidak tersimpan di cloud
+      const safeData = JSON.parse(JSON.stringify(dataToSave));
+      delete safeData.credentials;
+      const payload = JSON.stringify(safeData);
+      const ts = new Date().toISOString();
+      await setDoc(DOC_REF, { payload, updatedAt: ts });
+      localStorage.setItem('hrportal_ts', ts);
+      showFbStatus('synced');
+    } catch(e) {
+      console.error('Firebase save error:', e);
+      showFbStatus('error', e.message);
+      throw e;
+    }
+  };
+
+  function showFbStatus(state, errMsg) {
+    const el  = document.getElementById('fb-status');
+    const dot = document.getElementById('sync-dot');
+    if (state === 'synced') {
+      if (el) { el.innerHTML = '<i class="ti ti-cloud-check"></i> Cloud Sync Aktif'; el.style.color = '#A8F0A0'; }
+      if (dot) dot.style.display = 'none';
+    } else if (state === 'saving') {
+      if (el) { el.innerHTML = '<i class="ti ti-cloud-upload"></i> Menyimpan...'; el.style.color = '#FFD93D'; }
+      if (dot) { dot.style.display = 'inline-block'; dot.style.background = '#FFD93D'; dot.title = 'Menyimpan ke cloud...'; }
+    } else {
+      const hint = errMsg || 'Offline / Gagal konek ke cloud';
+      if (el) { el.innerHTML = '<i class="ti ti-cloud-off"></i> Offline / Error'; el.style.color = '#FF5C35'; }
+      if (dot) { dot.style.display = 'inline-block'; dot.style.background = '#FF5C35'; dot.title = hint; }
+      // Tampilkan toast error agar user tahu (sekali saja, jangan spam)
+      if (!window._fbErrShown) {
+        window._fbErrShown = true;
+        // Delay agar toast DOM sudah siap
+        setTimeout(() => {
+          if (typeof showToast === 'function') showToast('⚠️ Gagal konek ke cloud: ' + hint, 'error');
+        }, 1500);
+      }
+    }
+  }
+  window._showFbStatus = showFbStatus;
+</script>
+<style>
+:root {
+  --c1: #FF5C35; --c2: #FFD93D; --c3: #6BCBFF; --c4: #A8F0A0;
+  --dark: #111110; --dark2: #1C1C1A; --dark3: #252523; --dark4: #2E2E2B;
+  --muted: #888880; --light: #F5F4EF; --white: #FFFFFF;
+  --font-head: 'Plus Jakarta Sans', sans-serif; --font-body: 'Inter', sans-serif;
+  --radius: 16px; --radius-sm: 10px;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body { font-family: var(--font-body); background: var(--dark); color: var(--white); overflow-x: hidden; }
+::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: var(--dark2); } ::-webkit-scrollbar-thumb { background: var(--dark4); border-radius: 4px; }
+
+/* NAV */
+nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; height: 64px; background: rgba(17,17,16,0.9); backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255,255,255,0.07); }
+.nav-logo { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.logo-mark { width: 32px; height: 32px; border-radius: 8px; background: var(--c1); display: flex; align-items: center; justify-content: center; font-family: var(--font-head); font-weight: 800; font-size: 14px; color: #fff; }
+.logo-text { font-family: var(--font-head); font-weight: 700; font-size: 15px; letter-spacing: -0.3px; }
+.logo-text span { color: var(--c1); }
+.nav-links { display: flex; gap: 2px; }
+.nav-link { padding: 6px 12px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer; transition: all .2s; border: none; background: none; font-family: var(--font-body); }
+.nav-link:hover, .nav-link.active { color: var(--white); background: var(--dark3); }
+
+/* CUSTOM MENU DROPDOWN */
+.custom-dd-wrap { position: relative; }
+.custom-dd-menu {
+  display: none; position: absolute; top: calc(100% + 8px); left: 50%;
+  transform: translateX(-50%);
+  background: var(--dark2); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius-sm); padding: 6px; min-width: 170px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.4); z-index: 200;
+  animation: ddFadeIn .15s ease;
+}
+.custom-dd-menu.open { display: block; }
+@keyframes ddFadeIn { from{opacity:0;transform:translateX(-50%) translateY(-6px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
+.custom-dd-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-radius: 7px; font-size: 13px; font-weight: 500;
+  color: var(--muted); text-decoration: none; transition: all .15s;
+  white-space: nowrap;
+}
+.custom-dd-item:hover { background: var(--dark3); color: var(--white); }
+.nav-right { display: flex; align-items: center; gap: 8px; }
+.btn-login { padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; border: 1px solid rgba(255,255,255,0.15); background: transparent; color: var(--white); cursor: pointer; transition: all .2s; font-family: var(--font-body); }
+.btn-login:hover { background: var(--dark3); }
+.btn-primary { padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; border: none; background: var(--c1); color: #fff; cursor: pointer; transition: all .2s; font-family: var(--font-body); }
+.btn-primary:hover { background: #e04e2a; transform: translateY(-1px); }
+
+/* PAGES */
+.page { display: none; min-height: 100vh; padding-top: 64px; }
+.page.active { display: block; }
+
+/* HERO */
+.hero { position: relative; padding: 80px 40px 60px; display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center; max-width: 1200px; margin: 0 auto; }
+.hero-bg-blob { position: absolute; width: 600px; height: 600px; border-radius: 50%; filter: blur(120px); opacity: 0.12; top: -100px; right: -100px; pointer-events: none; background: radial-gradient(circle, var(--c1) 0%, var(--c3) 60%, transparent 100%); }
+.hero-tag { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; background: rgba(255,92,53,0.15); color: var(--c1); border: 1px solid rgba(255,92,53,0.25); margin-bottom: 20px; }
+.hero h1 { font-family: var(--font-head); font-size: 52px; font-weight: 800; line-height: 1.05; letter-spacing: -1.5px; margin-bottom: 20px; }
+.hero h1 .accent { color: var(--c1); } .hero h1 .accent2 { color: var(--c3); }
+.hero p { font-size: 16px; color: var(--muted); line-height: 1.7; margin-bottom: 32px; max-width: 420px; }
+.hero-cta { display: flex; gap: 12px; flex-wrap: wrap; }
+.btn-hero { padding: 14px 28px; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all .25s; font-family: var(--font-body); display: flex; align-items: center; gap: 8px; }
+.btn-hero-primary { background: var(--c1); color: #fff; border: none; }
+.btn-hero-primary:hover { background: #e04e2a; transform: translateY(-2px); box-shadow: 0 12px 32px rgba(255,92,53,0.35); }
+.btn-hero-ghost { background: transparent; color: var(--white); border: 1px solid rgba(255,255,255,0.15); }
+.btn-hero-ghost:hover { background: var(--dark3); }
+.hero-stats { display: flex; gap: 32px; margin-top: 40px; }
+.stat-num { font-family: var(--font-head); font-size: 28px; font-weight: 800; color: var(--white); }
+.stat-label { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.hero-cards { display: flex; flex-direction: column; gap: 12px; }
+.hero-card { background: var(--dark2); border: 1px solid rgba(255,255,255,0.07); border-radius: var(--radius); padding: 18px 20px; display: flex; align-items: center; gap: 14px; cursor: pointer; transition: all .2s; animation: slideUp .5s ease both; }
+.hero-card:hover { border-color: rgba(255,92,53,0.3); transform: translateX(4px); }
+.hero-card:nth-child(2){animation-delay:.1s} .hero-card:nth-child(3){animation-delay:.2s} .hero-card:nth-child(4){animation-delay:.3s}
+.hcard-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+.hcard-title { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+.hcard-sub { font-size: 12px; color: var(--muted); }
+.hcard-arrow { margin-left: auto; color: var(--muted); font-size: 16px; }
+@keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+
+/* TICKER */
+.ticker-wrap { background: var(--c1); padding: 10px 0; overflow: hidden; border-top: 1px solid rgba(255,255,255,0.1); border-bottom: 1px solid rgba(255,255,255,0.1); }
+.ticker-inner { display: flex; gap: 48px; animation: ticker 30s linear infinite; white-space: nowrap; }
+.ticker-item { font-size: 13px; font-weight: 500; color: #fff; display: flex; align-items: center; gap: 8px; }
+.ticker-dot { width: 6px; height: 6px; background: rgba(255,255,255,0.6); border-radius: 50%; }
+@keyframes ticker { from{transform:translateX(0)} to{transform:translateX(-50%)} }
+
+/* SECTION */
+.section { padding: 64px 40px; max-width: 1200px; margin: 0 auto; }
+.section-label { font-size: 12px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: var(--c1); margin-bottom: 10px; }
+.section-title { font-family: var(--font-head); font-size: 36px; font-weight: 800; letter-spacing: -0.8px; margin-bottom: 8px; }
+.section-sub { font-size: 15px; color: var(--muted); max-width: 500px; line-height: 1.6; margin-bottom: 40px; }
+
+/* CARDS */
+.cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+.card { background: var(--dark2); border: 1px solid rgba(255,255,255,0.07); border-radius: var(--radius); padding: 24px; transition: all .2s; cursor: pointer; }
+.card:hover { border-color: rgba(255,255,255,0.15); transform: translateY(-3px); background: var(--dark3); }
+.card-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 22px; margin-bottom: 16px; }
+.card-title { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+.card-desc { font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 16px; }
+.card-meta { display: flex; align-items: center; justify-content: space-between; }
+.card-tag { font-size: 11px; padding: 4px 10px; border-radius: 20px; font-weight: 500; }
+
+/* POLICY */
+.policy-layout { display: grid; grid-template-columns: 240px 1fr; gap: 32px; padding: 40px; max-width: 1200px; margin: 0 auto; }
+.policy-sidebar { position: sticky; top: 80px; align-self: start; }
+.policy-sidebar h3 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 12px; }
+.policy-nav-item { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; color: var(--muted); transition: all .15s; margin-bottom: 2px; border: none; background: none; width: 100%; text-align: left; font-family: var(--font-body); }
+.policy-nav-item:hover, .policy-nav-item.active { background: var(--dark3); color: var(--white); }
+.policy-nav-item.active { border-left: 2px solid var(--c1); padding-left: 10px; }
+.policy-block { background: var(--dark2); border: 1px solid rgba(255,255,255,0.07); border-radius: var(--radius); padding: 28px; margin-bottom: 16px; }
+.policy-block h3 { font-family: var(--font-head); font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+.policy-block .updated { font-size: 11px; color: var(--muted); margin-bottom: 16px; }
+.policy-list-item { display: flex; gap: 10px; margin-bottom: 10px; font-size: 14px; color: rgba(255,255,255,0.85); line-height: 1.6; }
+.policy-bullet { width: 20px; height: 20px; border-radius: 6px; background: rgba(255,92,53,0.15); color: var(--c1); display: flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0; margin-top: 2px; }
+.policy-penalty { margin-top: 16px; padding: 12px 16px; border-radius: var(--radius-sm); background: rgba(255,92,53,0.08); border: 1px solid rgba(255,92,53,0.2); font-size: 13px; color: rgba(255,92,53,0.9); display: flex; gap: 8px; align-items: flex-start; }
+
+/* PKWT */
+.pkwt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+.pkwt-card { background: var(--dark2); border: 1px solid rgba(255,255,255,0.07); border-radius: var(--radius); padding: 24px; transition: all .2s; }
+.pkwt-card:hover { border-color: rgba(107,203,255,0.3); }
+.pkwt-type { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+.pkwt-name { font-family: var(--font-head); font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+.pkwt-dept { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+.pkwt-row { display: flex; justify-content: space-between; font-size: 13px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.05); margin-bottom: 8px; }
+.pkwt-row:last-child { border-bottom: none; }
+.pkwt-row .label { color: var(--muted); }
+.pkwt-badge { padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+.badge-active { background: rgba(168,240,160,0.15); color: #A8F0A0; }
+.badge-end { background: rgba(255,217,61,0.15); color: #FFD93D; }
+.badge-contract { background: rgba(107,203,255,0.15); color: var(--c3); }
+.badge-permanent { background: rgba(168,240,160,0.15); color: #A8F0A0; }
+
+/* ORG */
+.org-wrap { background: var(--dark2); border: 1px solid rgba(255,255,255,0.07); border-radius: var(--radius); padding: 32px; overflow-x: auto; }
+.org-level { display: flex; justify-content: center; gap: 24px; margin-bottom: 8px; }
+.org-node { background: var(--dark3); border: 1px solid rgba(255,255,255,0.1); border-radius: var(--radius-sm); padding: 12px 16px; text-align: center; min-width: 130px; transition: all .2s; }
+.org-node:hover { border-color: rgba(255,92,53,0.4); }
+.org-node.ceo { background: rgba(255,92,53,0.12); border-color: rgba(255,92,53,0.35); min-width: 160px; }
+.org-node-name { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+.org-node-role { font-size: 11px; color: var(--muted); }
+.org-node-dept { font-size: 10px; color: var(--c1); font-weight: 600; margin-top: 4px; }
+
+/* CHAT */
+.chat-page { max-width: 860px; margin: 0 auto; padding: 40px; }
+.chat-header-box { background: linear-gradient(135deg,rgba(255,92,53,0.15) 0%,rgba(107,203,255,0.1) 100%); border: 1px solid rgba(255,255,255,0.08); border-radius: var(--radius); padding: 28px; margin-bottom: 24px; display: flex; align-items: center; gap: 16px; }
+.chat-avatar { width: 52px; height: 52px; border-radius: 14px; background: var(--c1); display: flex; align-items: center; justify-content: center; font-size: 24px; flex-shrink: 0; }
+.chat-header-box h2 { font-family: var(--font-head); font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+.chat-header-box p { font-size: 13px; color: var(--muted); }
+.chat-box { background: var(--dark2); border: 1px solid rgba(255,255,255,0.07); border-radius: var(--radius); overflow: hidden; }
+.chat-messages { height: 380px; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.msg { max-width: 78%; }
+.msg.user { align-self: flex-end; } .msg.bot { align-self: flex-start; }
+.msg-bubble { padding: 12px 16px; border-radius: 14px; font-size: 14px; line-height: 1.6; }
+.msg.user .msg-bubble { background: var(--c1); color: #fff; border-bottom-right-radius: 4px; }
+.msg.bot .msg-bubble { background: var(--dark3); color: var(--white); border-bottom-left-radius: 4px; border: 1px solid rgba(255,255,255,0.07); }
+.msg-time { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.msg.user .msg-time { text-align: right; }
+.typing-dots { display: flex; gap: 4px; align-items: center; padding: 4px 0; }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
+.dot:nth-child(2){animation-delay:.2s} .dot:nth-child(3){animation-delay:.4s}
+@keyframes blink { 0%,60%,100%{opacity:.3} 30%{opacity:1} }
+.chat-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 20px; border-top: 1px solid rgba(255,255,255,0.06); }
+.chip { padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: all .15s; background: var(--dark3); border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.75); }
+.chip:hover { border-color: var(--c1); color: var(--c1); background: rgba(255,92,53,0.08); }
+.chat-input-row { display: flex; gap: 10px; padding: 14px 20px; border-top: 1px solid rgba(255,255,255,0.06); }
+.chat-input-row textarea { flex: 1; background: var(--dark3); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; color: var(--white); font-family: var(--font-body); font-size: 14px; padding: 10px 14px; resize: none; }
+.chat-input-row textarea:focus { outline: none; border-color: rgba(255,92,53,0.4); }
+.chat-send { width: 44px; height: 44px; background: var(--c1); border: none; border-radius: 10px; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; transition: all .2s; flex-shrink: 0; }
+.chat-send:hover { background: #e04e2a; } .chat-send:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* FORM */
+.form-page { max-width: 720px; margin: 0 auto; padding: 40px; }
+.form-tabs { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+.form-tab { padding: 8px 16px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; border: 1px solid rgba(255,255,255,0.1); background: transparent; color: var(--muted); font-family: var(--font-body); }
+.form-tab.active { background: var(--c1); border-color: var(--c1); color: #fff; }
+.form-box { background: var(--dark2); border: 1px solid rgba(255,255,255,0.07); border-radius: var(--radius); padding: 28px; }
+.form-box h3 { font-family: var(--font-head); font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+.form-box .form-desc { font-size: 13px; color: var(--muted); margin-bottom: 24px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-group.full { grid-column: 1/-1; }
+.form-label { font-size: 12px; font-weight: 500; color: rgba(255,255,255,0.7); }
+.form-input, .form-select, .form-textarea { background: var(--dark3); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: var(--white); font-family: var(--font-body); font-size: 14px; padding: 10px 14px; transition: border-color .15s; }
+.form-input:focus, .form-select:focus, .form-textarea:focus { outline: none; border-color: rgba(255,92,53,0.5); }
+.form-select option { background: var(--dark3); }
+.form-textarea { resize: vertical; min-height: 80px; }
+.form-submit { width: 100%; margin-top: 20px; padding: 14px; background: var(--c1); border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; font-family: var(--font-body); transition: all .2s; }
+.form-submit:hover { background: #e04e2a; transform: translateY(-1px); }
+.form-note { font-size: 12px; color: var(--muted); text-align: center; margin-top: 12px; }
+
+/* FAQ */
+.faq-wrap { max-width: 760px; }
+.faq-item { border-bottom: 1px solid rgba(255,255,255,0.07); }
+.faq-q { display: flex; align-items: center; justify-content: space-between; padding: 18px 0; cursor: pointer; font-size: 15px; font-weight: 500; transition: color .15s; }
+.faq-q:hover { color: var(--c1); }
+.faq-q .icon { transition: transform .3s; color: var(--muted); flex-shrink: 0; }
+.faq-q.open .icon { transform: rotate(45deg); color: var(--c1); }
+.faq-a { font-size: 14px; color: var(--muted); line-height: 1.7; padding-bottom: 18px; display: none; }
+.faq-a.show { display: block; }
+
+/* MODAL */
+.modal-overlay { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity .2s; }
+.modal-overlay.show { opacity: 1; pointer-events: all; }
+.modal { background: var(--dark2); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 36px; width: 420px; max-width: 90vw; position: relative; }
+.modal h2 { font-family: var(--font-head); font-size: 22px; font-weight: 800; margin-bottom: 4px; }
+.modal > p { font-size: 13px; color: var(--muted); margin-bottom: 24px; }
+.modal-close { position: absolute; right: 16px; top: 16px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 20px; }
+.modal-field { margin-bottom: 14px; }
+.modal-field label { display: block; font-size: 12px; color: rgba(255,255,255,0.6); margin-bottom: 6px; font-weight: 500; }
+.modal-field input { width: 100%; background: var(--dark3); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: var(--white); font-family: var(--font-body); font-size: 14px; padding: 10px 14px; }
+.modal-field input:focus { outline: none; border-color: rgba(255,92,53,0.5); }
+.modal-submit { width: 100%; margin-top: 4px; padding: 13px; background: var(--c1); border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; font-family: var(--font-body); transition: all .2s; }
+.modal-submit:hover { background: #e04e2a; }
+.modal-note { font-size: 12px; color: var(--muted); text-align: center; margin-top: 12px; }
+.modal-error { font-size: 13px; color: var(--c1); margin-top: 10px; text-align: center; display: none; }
+
+/* FOOTER */
+footer { border-top: 1px solid rgba(255,255,255,0.06); padding: 32px 40px; display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--muted); }
+footer a { color: var(--muted); text-decoration: none; } footer a:hover { color: var(--c1); }
+
+/* ══════════════════════════════════════
+   CONTENT MANAGER (Admin Panel)
+══════════════════════════════════════ */
+#page-admin { background: var(--dark); }
+.admin-wrap { max-width: 1100px; margin: 0 auto; padding: 40px; }
+.admin-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 32px; }
+.admin-header h1 { font-family: var(--font-head); font-size: 28px; font-weight: 800; }
+.admin-badge { background: rgba(255,92,53,0.15); color: var(--c1); border: 1px solid rgba(255,92,53,0.3); padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+.admin-tabs { display: flex; gap: 6px; margin-bottom: 28px; flex-wrap: wrap; border-bottom: 1px solid rgba(255,255,255,0.07); padding-bottom: 16px; }
+.admin-tab { padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid rgba(255,255,255,0.1); background: transparent; color: var(--muted); font-family: var(--font-body); transition: all .15s; }
+.admin-tab.active { background: var(--c1); border-color: var(--c1); color: #fff; }
+.admin-section { display: none; } .admin-section.active { display: block; }
+
+/* Editor blocks */
+.editor-block { background: var(--dark2); border: 1px solid rgba(255,255,255,0.08); border-radius: var(--radius); padding: 24px; margin-bottom: 16px; }
+.editor-block-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.editor-block-title { font-size: 14px; font-weight: 600; color: var(--white); }
+.editor-block-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.editor-actions { display: flex; gap: 8px; }
+.btn-edit { padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; border: 1px solid rgba(255,255,255,0.12); background: var(--dark3); color: var(--white); font-family: var(--font-body); transition: all .15s; display: flex; align-items: center; gap: 5px; }
+.btn-edit:hover { border-color: var(--c1); color: var(--c1); }
+.btn-save { padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; background: var(--c1); color: #fff; font-family: var(--font-body); transition: all .15s; display: flex; align-items: center; gap: 5px; }
+.btn-save:hover { background: #e04e2a; }
+.btn-danger { padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; border: 1px solid rgba(255,92,53,0.3); background: rgba(255,92,53,0.08); color: var(--c1); font-family: var(--font-body); }
+.btn-danger:hover { background: rgba(255,92,53,0.2); }
+.btn-add { display: flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 10px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px dashed rgba(255,255,255,0.2); background: transparent; color: var(--muted); font-family: var(--font-body); transition: all .15s; margin-top: 12px; }
+.btn-add:hover { border-color: var(--c1); color: var(--c1); background: rgba(255,92,53,0.05); }
+
+/* Paste editor */
+.paste-area { width: 100%; background: var(--dark3); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; color: var(--white); font-family: 'Courier New', monospace; font-size: 13px; padding: 14px; resize: vertical; min-height: 120px; line-height: 1.6; transition: border-color .15s; }
+.paste-area:focus { outline: none; border-color: rgba(255,92,53,0.4); }
+.paste-hint { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+.inline-edit { width: 100%; background: var(--dark3); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; color: var(--white); font-family: var(--font-body); font-size: 14px; padding: 8px 12px; transition: border-color .15s; }
+.inline-edit:focus { outline: none; border-color: rgba(255,92,53,0.5); }
+.field-row { margin-bottom: 12px; }
+.field-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 5px; }
+.save-success { font-size: 12px; color: var(--c4); display: flex; align-items: center; gap: 4px; animation: fadeIn .3s ease; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }
+.preview-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); background: var(--dark4); padding: 3px 10px; border-radius: 20px; }
+
+/* Point list editor */
+.point-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.point-item { display: flex; align-items: center; gap: 8px; }
+.point-item input { flex: 1; background: var(--dark3); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: var(--white); font-family: var(--font-body); font-size: 13px; padding: 8px 12px; }
+.point-item input:focus { outline: none; border-color: rgba(255,92,53,0.4); }
+.btn-del-point { width: 28px; height: 28px; border-radius: 6px; border: 1px solid rgba(255,92,53,0.25); background: rgba(255,92,53,0.08); color: var(--c1); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
+.btn-del-point:hover { background: rgba(255,92,53,0.2); }
+.collapse-toggle { cursor: pointer; user-select: none; }
+
+/* API Key area */
+.api-key-box { background: rgba(255,217,61,0.07); border: 1px solid rgba(255,217,61,0.2); border-radius: var(--radius-sm); padding: 16px; margin-bottom: 16px; }
+.api-key-box h4 { font-size: 13px; font-weight: 600; color: var(--c2); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.api-key-box p { font-size: 12px; color: var(--muted); margin-bottom: 12px; line-height: 1.6; }
+.api-input-row { display: flex; gap: 8px; }
+.api-input-row input { flex: 1; background: var(--dark3); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: var(--white); font-family: 'Courier New', monospace; font-size: 13px; padding: 9px 12px; }
+.api-input-row input:focus { outline: none; border-color: rgba(255,217,61,0.4); }
+.api-status { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 8px; }
+.dot-status { width: 7px; height: 7px; border-radius: 50%; }
+.dot-ok { background: var(--c4); }
+.dot-no { background: var(--c1); }
+.dot-wait { background: var(--c2); }
+
+/* PKWT Employee Cards */
+.emp-card { background: var(--dark2); border: 1px solid rgba(255,255,255,0.07); border-radius: var(--radius); padding: 20px; margin-bottom: 12px; }
+.emp-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.emp-name-input { font-family: var(--font-head); font-size: 18px; font-weight: 700; background: transparent; border: none; color: var(--white); width: 100%; }
+.emp-name-input:focus { outline: none; border-bottom: 1px solid var(--c1); }
+
+/* Ticker Editor */
+.ticker-list { display: flex; flex-direction: column; gap: 8px; }
+.ticker-item-edit { display: flex; align-items: center; gap: 8px; }
+.ticker-item-edit input { flex: 1; background: var(--dark3); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: var(--white); font-family: var(--font-body); font-size: 13px; padding: 8px 12px; }
+.ticker-item-edit input:focus { outline: none; border-color: rgba(255,92,53,0.4); }
+
+/* Announcement Editor */
+.ann-card-edit { background: var(--dark3); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+.ann-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+
+/* Toast */
+.toast { position: fixed; bottom: 24px; right: 24px; background: var(--dark3); border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 14px 20px; font-size: 13px; font-weight: 500; z-index: 9999; transform: translateY(80px); opacity: 0; transition: all .3s cubic-bezier(.34,1.56,.64,1); display: flex; align-items: center; gap: 8px; }
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.success { border-color: rgba(168,240,160,0.3); } .toast.success i { color: var(--c4); }
+.toast.error { border-color: rgba(255,92,53,0.3); } .toast.error i { color: var(--c1); }
+
+/* Divider */
+.divider { height: 1px; background: rgba(255,255,255,0.07); margin: 20px 0; }
+
+/* AUTH LOADING OVERLAY */
+#auth-loading {
+  position: fixed; inset: 0; z-index: 9999;
+  background: var(--dark);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+}
+#auth-loading .logo-mark-lg {
+  width: 56px; height: 56px; border-radius: 14px;
+  background: var(--c1); display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-head); font-weight: 800; font-size: 22px; color: #fff;
+  margin-bottom: 4px;
+}
+#auth-loading p { font-size: 13px; color: var(--muted); }
+.spinner {
+  width: 32px; height: 32px; border: 3px solid rgba(255,255,255,0.1);
+  border-top-color: var(--c1); border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* USER MANAGEMENT TABLE */
+.user-table { width: 100%; border-collapse: collapse; }
+.user-table th { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); padding: 8px 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.07); }
+.user-table td { padding: 12px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.05); vertical-align: middle; }
+.user-table tr:last-child td { border-bottom: none; }
+.user-table tr:hover td { background: rgba(255,255,255,0.02); }
+.role-badge { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+.role-admin { background: rgba(255,92,53,0.15); color: var(--c1); }
+.role-employee { background: rgba(107,203,255,0.12); color: var(--c3); }
+.user-avatar-sm { width: 32px; height: 32px; border-radius: 8px; background: var(--dark4); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 11px; color: var(--white); margin-right: 8px; vertical-align: middle; }
+
+/* ADD USER FORM */
+.add-user-form { background: var(--dark3); border: 1px dashed rgba(255,255,255,0.15); border-radius: var(--radius); padding: 20px; margin-top: 16px; display: none; }
+.add-user-form.show { display: block; }
+.add-user-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+
+</style>
+</head>
+<body>
+
+<!-- AUTH LOADING OVERLAY -->
+<div id="auth-loading">
+  <div class="logo-mark-lg">LG</div>
+  <div class="spinner"></div>
+  <p>Menghubungkan ke portal...</p>
+</div>
+
+<nav>
+  <div class="nav-logo" onclick="showPage('home')">
+    <div class="logo-mark">LG</div>
+    <div class="logo-text">Luzie<span>Group</span> HR</div>
+  </div>
+  <div class="nav-links">
+    <button class="nav-link active" id="nl-home" onclick="showPage('home')">Beranda</button>
+    <button class="nav-link" id="nl-policy" onclick="showPage('policy')">Peraturan</button>
+    <button class="nav-link" id="nl-pkwt" onclick="showPage('pkwt')">PKWT/PKWTT</button>
+    <button class="nav-link" id="nl-org" onclick="showPage('org')">Struktur</button>
+    <button class="nav-link" id="nl-faq" onclick="showPage('faq')">FAQ</button>
+    <button class="nav-link" id="nl-form" onclick="requireLogin('form')">Pengajuan</button>
+    <button class="nav-link" id="nl-chat" onclick="showPage('chat')">HR Assistant</button>
+    <div id="custom-nav-menus"></div>
+  </div>
+  <div class="nav-right">
+    <!-- Indikator sync kecil -->
+    <span id="sync-dot" title="Offline / Gagal konek ke cloud" style="display:none;width:8px;height:8px;border-radius:50%;background:#FF5C35;margin-right:4px;flex-shrink:0;animation:blink 1.5s infinite"></span>
+    <button class="btn-login" onclick="openLogin()" id="btn-login-nav">Masuk</button>
+    <div id="user-badge" style="display:none;align-items:center;gap:8px;font-size:13px;color:var(--white)">
+      <div id="user-avatar" style="width:28px;height:28px;border-radius:8px;background:var(--c1);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px">AK</div>
+      <span id="user-name-nav">Andi K.</span>
+      <button class="nav-link" id="nl-admin" onclick="requireAdmin('admin')" style="color:var(--c2);font-size:12px;padding:4px 10px"><i class="ti ti-settings"></i> Admin</button>
+      <button onclick="logout()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px">Keluar</button>
+    </div>
+  </div>
+</nav>
+
+<!-- ── HOME ── -->
+<div class="page active" id="page-home">
+  <div class="hero">
+    <div class="hero-bg-blob"></div>
+    <div style="animation:slideUp .6s ease both">
+      <div class="hero-tag"><i class="ti ti-sparkles"></i> Portal Resmi HRD</div>
+      <h1 id="hero-title">Semua Info HR<br>di Satu <span class="accent">Tempat</span><br><span class="accent2">Kapan Saja</span></h1>
+      <p id="hero-sub">Akses peraturan, ajukan cuti & lembur, tanya AI, dan pantau informasi HR perusahaan secara mandiri — kapanpun, di manapun.</p>
+      <div class="hero-cta">
+        <button class="btn-hero btn-hero-primary" onclick="showPage('chat')"><i class="ti ti-robot"></i> Tanya HR Assistant</button>
+        <button class="btn-hero btn-hero-ghost" onclick="showPage('policy')"><i class="ti ti-book"></i> Lihat Peraturan</button>
+      </div>
+      <div class="hero-stats">
+        <div class="stat-item"><div class="stat-num" id="stat1">27</div><div class="stat-label">Hari Libur 2025</div></div>
+        <div class="stat-item"><div class="stat-num" id="stat2">12</div><div class="stat-label">Hari Cuti/Tahun</div></div>
+        <div class="stat-item"><div class="stat-num" id="stat3">24/7</div><div class="stat-label">HR Assistant</div></div>
+      </div>
+    </div>
+    <div class="hero-cards">
+      <div class="hero-card" onclick="showPage('policy')"><div class="hcard-icon" style="background:rgba(255,92,53,0.15);color:var(--c1)"><i class="ti ti-file-text"></i></div><div><div class="hcard-title">Peraturan Perusahaan</div><div class="hcard-sub">Cuti, jam kerja, dress code & lebih</div></div><div class="hcard-arrow"><i class="ti ti-arrow-right"></i></div></div>
+      <div class="hero-card" onclick="requireLogin('form')"><div class="hcard-icon" style="background:rgba(107,203,255,0.15);color:var(--c3)"><i class="ti ti-send"></i></div><div><div class="hcard-title">Pengajuan Cuti & Lembur</div><div class="hcard-sub">Form online, konfirmasi dalam 24 jam</div></div><div class="hcard-arrow"><i class="ti ti-arrow-right"></i></div></div>
+      <div class="hero-card" onclick="requireLogin('pkwt')"><div class="hcard-icon" style="background:rgba(168,240,160,0.15);color:#A8F0A0"><i class="ti ti-license"></i></div><div><div class="hcard-title">Status PKWT / PKWTT</div><div class="hcard-sub">Info kontrak & hak karyawan</div></div><div class="hcard-arrow"><i class="ti ti-arrow-right"></i></div></div>
+      <div class="hero-card" onclick="requireLogin('org')"><div class="hcard-icon" style="background:rgba(255,217,61,0.15);color:var(--c2)"><i class="ti ti-sitemap"></i></div><div><div class="hcard-title">Struktur Organisasi</div><div class="hcard-sub">Tim & hierarki perusahaan</div></div><div class="hcard-arrow"><i class="ti ti-arrow-right"></i></div></div>
+    </div>
+  </div>
+  <div class="ticker-wrap"><div class="ticker-inner" id="ticker-content"></div></div>
+  <div class="section">
+    <div class="section-label">Update Terkini</div>
+    <div class="section-title">Pengumuman HR</div>
+    <div class="section-sub">Informasi terbaru dari tim HRD Luzie Group.</div>
+    <div class="cards-grid" id="announcement-cards"></div>
+  </div>
+</div>
+
+<!-- ── POLICY ── -->
+<div class="page" id="page-policy">
+  <div class="policy-layout">
+    <div class="policy-sidebar">
+      <h3>Kategori</h3>
+      <div id="policy-cats"></div>
+    </div>
+    <div class="policy-content" id="policy-content-area"></div>
+  </div>
+</div>
+
+<!-- ── PKWT ── -->
+<div class="page" id="page-pkwt">
+  <div class="section">
+    <div class="section-label">Kontrak Kerja</div>
+    <div class="section-title">Status PKWT / PKWTT</div>
+    <div class="section-sub">Perbedaan jenis kontrak kerja dan informasi karyawan terdaftar.</div>
+    <div class="pkwt-grid" id="pkwt-cards"></div>
+    <div class="divider" style="margin:40px 0"></div>
+    <div class="section-label" style="margin-top:0">Hak Karyawan</div>
+    <div class="section-title" style="font-size:26px">Berdasarkan UU Cipta Kerja & PP Turunan</div>
+    <div class="cards-grid" style="margin-top:24px">
+      <div class="card"><div class="card-icon" style="background:rgba(255,92,53,0.15);color:var(--c1)"><i class="ti ti-calendar-off"></i></div><div class="card-title">Cuti & Istirahat</div><div class="card-desc">Cuti tahunan 12 hari setelah 12 bulan kerja. Cuti bersalin, haid, dan alasan mendesak sesuai ketentuan.</div></div>
+      <div class="card"><div class="card-icon" style="background:rgba(107,203,255,0.15);color:var(--c3)"><i class="ti ti-coin"></i></div><div class="card-title">Upah & THR</div><div class="card-desc">Upah minimum sesuai UMR berlaku. THR wajib dibayar paling lambat H-7 Lebaran, minimal 1 bulan upah.</div></div>
+      <div class="card"><div class="card-icon" style="background:rgba(168,240,160,0.15);color:#A8F0A0"><i class="ti ti-heart-rate-monitor"></i></div><div class="card-title">BPJS Kesehatan & TK</div><div class="card-desc">Perusahaan wajib mendaftarkan karyawan ke BPJS Kesehatan dan BPJS Ketenagakerjaan sejak hari pertama kerja.</div></div>
+      <div class="card"><div class="card-icon" style="background:rgba(255,217,61,0.15);color:var(--c2)"><i class="ti ti-clock-overtime"></i></div><div class="card-title">Lembur</div><div class="card-desc">Maks. 4 jam/hari dan 18 jam/minggu. Kompensasi 1,5x–2x upah per jam sesuai aturan berlaku.</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── ORG ── -->
+<div class="page" id="page-org">
+  <div class="section">
+    <div class="section-label">Perusahaan</div>
+    <div class="section-title">Struktur Organisasi</div>
+    <div class="section-sub" id="org-subtitle">Luzie Group — per Januari 2025</div>
+    <div class="org-wrap" id="org-chart"></div>
+  </div>
+</div>
+
+<!-- ── FORM ── -->
+<div class="page" id="page-form">
+  <div class="form-page">
+    <div class="section-label" style="padding:0">Khusus Karyawan</div>
+    <div class="section-title" style="padding:0;font-size:32px;margin-bottom:4px">Form Pengajuan</div>
+    <p style="font-size:14px;color:var(--muted);margin-bottom:24px">Semua pengajuan akan diproses oleh HRD dalam 1×24 jam kerja.</p>
+    <div class="form-tabs">
+      <button class="form-tab active" onclick="switchForm('cuti')">Cuti</button>
+      <button class="form-tab" onclick="switchForm('lembur')">Lembur</button>
+      <button class="form-tab" onclick="switchForm('reimburse')">Reimbursement</button>
+      <button class="form-tab" onclick="switchForm('izin')">Izin Tidak Masuk</button>
+    </div>
+    <div id="form-area"></div>
+  </div>
+</div>
+
+<!-- ── CHAT ── -->
+<div class="page" id="page-chat">
+  <div class="chat-page">
+    <div class="section-label" style="padding:0">AI-Powered</div>
+    <div class="section-title" style="padding:0;font-size:32px;margin-bottom:20px">HR Assistant</div>
+    <div class="chat-header-box">
+      <div class="chat-avatar">🤖</div>
+      <div>
+        <h2>Halo! Saya HARA</h2>
+        <p>Human Resources AI Assistant — siap menjawab pertanyaan seputar peraturan, hak, dan kebijakan perusahaan 24/7.</p>
+      </div>
+      <div style="margin-left:auto;text-align:right">
+        <div id="chat-status-dot" style="font-size:11px;color:#A8F0A0;font-weight:600">● Online</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">Respons &lt; 10 detik</div>
+      </div>
+    </div>
+    <div class="chat-box">
+      <div class="chat-messages" id="chat-msgs">
+        <div class="msg bot"><div class="msg-bubble">Selamat datang di <b>HARA</b> — HR Assistant Luzie Group Digital! 👋<br>Silakan tanyakan apa saja tentang peraturan, cuti, lembur, atau kebijakan perusahaan. Saya siap membantu!</div><div class="msg-time">Sekarang</div></div>
+      </div>
+      <div class="chat-chips" id="chat-chips"></div>
+      <div class="chat-input-row">
+        <textarea id="chat-inp" rows="1" placeholder="Ketik pertanyaan Anda..." onkeydown="chatKey(event)"></textarea>
+        <button class="chat-send" id="chat-send-btn" onclick="chatSend()"><i class="ti ti-send"></i></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── FAQ ── -->
+<div class="page" id="page-faq">
+  <div class="section">
+    <div class="section-label">Bantuan</div>
+    <div class="section-title">Pertanyaan Umum</div>
+    <div class="section-sub">Jawaban atas pertanyaan yang paling sering ditanyakan karyawan.</div>
+    <div class="faq-wrap" id="faq-list"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════
+     ADMIN / CONTENT MANAGER
+══════════════════════════════════════ -->
+<div class="page" id="page-admin">
+  <div class="admin-wrap">
+    <div class="admin-header">
+      <div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:4px;font-weight:600;letter-spacing:1px;text-transform:uppercase">Panel Admin</div>
+        <h1>Content Manager</h1>
+        <p style="font-size:13px;color:var(--muted);margin-top:4px">Edit semua konten portal secara langsung. Perubahan tersimpan otomatis di browser.</p>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="admin-badge"><i class="ti ti-shield-check"></i> Admin Mode</span>
+        <button class="btn-save" onclick="exportData()"><i class="ti ti-download"></i> Export JSON</button>
+        <button class="btn-edit" onclick="importDataPrompt()"><i class="ti ti-upload"></i> Import JSON</button>
+        <span id="fb-status" style="font-size:12px;font-weight:600;display:flex;align-items:center;gap:5px;padding:6px 12px;background:var(--dark3);border-radius:8px;border:1px solid rgba(255,255,255,0.08)">
+          <i class="ti ti-cloud"></i> Menghubungkan...
+        </span>
+      </div>
+    </div>
+
+    <div class="admin-tabs" id="admin-tabs-wrap">
+      <button class="admin-tab active" data-tab="pengumuman" onclick="switchAdmin('pengumuman')">📢 Pengumuman</button>
+      <button class="admin-tab" data-tab="ticker" onclick="switchAdmin('ticker')">📡 Ticker</button>
+      <button class="admin-tab" data-tab="kebijakan" onclick="switchAdmin('kebijakan')">📋 Kebijakan</button>
+      <button class="admin-tab" data-tab="faq" onclick="switchAdmin('faq')">❓ FAQ</button>
+      <button class="admin-tab" data-tab="karyawan" onclick="switchAdmin('karyawan')">👥 Karyawan</button>
+      <button class="admin-tab" data-tab="organisasi" onclick="switchAdmin('organisasi')">🏢 Organisasi</button>
+      <button class="admin-tab" data-tab="hero" onclick="switchAdmin('hero')">🏠 Beranda</button>
+      <button class="admin-tab" data-tab="api" onclick="switchAdmin('api')">🔑 API Key</button>
+      <button class="admin-tab" data-tab="users" onclick="switchAdmin('users')">👤 Kelola User</button>
+      <button class="admin-tab" data-tab="custommenu" onclick="switchAdmin('custommenu')">🔗 Menu Kustom</button>
+      <button class="admin-tab" data-tab="sharelink" onclick="switchAdmin('sharelink')">📎 Copy Link</button>
+      <button class="admin-tab" data-tab="__manage__" onclick="switchAdmin('__manage__')" style="margin-left:auto;border-color:rgba(255,92,53,0.3);color:var(--c1)">⚙️ Kelola Tab</button>
+    </div>
+
+    <!-- PENGUMUMAN -->
+    <div class="admin-section active" id="as-pengumuman">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div><div style="font-size:15px;font-weight:600">Kartu Pengumuman</div><div style="font-size:12px;color:var(--muted);margin-top:2px">Tampil di halaman Beranda</div></div>
+        <button class="btn-add" onclick="addAnnouncement()"><i class="ti ti-plus"></i> Tambah Pengumuman</button>
+      </div>
+      <div id="ann-editor"></div>
+    </div>
+
+    <!-- TICKER -->
+    <div class="admin-section" id="as-ticker">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div><div style="font-size:15px;font-weight:600">Teks Ticker Berjalan</div><div style="font-size:12px;color:var(--muted);margin-top:2px">Tampil di bawah hero beranda</div></div>
+        <button class="btn-add" onclick="addTickerItem()"><i class="ti ti-plus"></i> Tambah Item</button>
+      </div>
+      <div id="ticker-editor"></div>
+      <button class="btn-save" style="margin-top:16px" onclick="saveTicker()"><i class="ti ti-check"></i> Simpan Ticker</button>
+    </div>
+
+    <!-- KEBIJAKAN -->
+    <div class="admin-section" id="as-kebijakan">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div><div style="font-size:15px;font-weight:600">Peraturan Perusahaan</div><div style="font-size:12px;color:var(--muted);margin-top:2px">Kelola kategori & isi peraturan</div></div>
+        <button class="btn-add" onclick="addPolicyCat()"><i class="ti ti-plus"></i> Tambah Kategori</button>
+      </div>
+      <div id="policy-editor"></div>
+    </div>
+
+    <!-- FAQ -->
+    <div class="admin-section" id="as-faq">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div><div style="font-size:15px;font-weight:600">FAQ (Pertanyaan Umum)</div><div style="font-size:12px;color:var(--muted);margin-top:2px">Kelola daftar Q&A</div></div>
+        <button class="btn-add" onclick="addFaq()"><i class="ti ti-plus"></i> Tambah FAQ</button>
+      </div>
+      <div id="faq-editor"></div>
+    </div>
+
+    <!-- KARYAWAN -->
+    <div class="admin-section" id="as-karyawan">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div><div style="font-size:15px;font-weight:600">Data Karyawan PKWT/PKWTT</div><div style="font-size:12px;color:var(--muted);margin-top:2px">Tampil di halaman PKWT</div></div>
+        <button class="btn-add" onclick="addEmployee()"><i class="ti ti-plus"></i> Tambah Karyawan</button>
+      </div>
+      <div id="employee-editor"></div>
+    </div>
+
+    <!-- ORGANISASI -->
+    <div class="admin-section" id="as-organisasi">
+      <div style="margin-bottom:16px"><div style="font-size:15px;font-weight:600">Struktur Organisasi</div><div style="font-size:12px;color:var(--muted);margin-top:2px">Paste atau edit langsung format JSON</div></div>
+      <div class="editor-block">
+        <div class="field-row"><div class="field-label">Subtitle Halaman Organisasi</div><input class="inline-edit" id="org-subtitle-edit" placeholder="Luzie Group — per Januari 2025"></div>
+        <div class="divider"></div>
+        <div class="field-row">
+          <div class="field-label">Data Org Chart (JSON)</div>
+          <div class="paste-hint" style="margin-bottom:8px">Format: array of level, tiap level berisi array nodes. Paste JSON baru untuk mengganti seluruh chart.</div>
+          <textarea class="paste-area" id="org-json-edit" rows="14"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn-save" onclick="saveOrg()"><i class="ti ti-check"></i> Simpan Organisasi</button>
+          <button class="btn-edit" onclick="resetOrgExample()"><i class="ti ti-refresh"></i> Lihat Contoh JSON</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- HERO / BERANDA -->
+    <div class="admin-section" id="as-hero">
+      <div style="margin-bottom:16px"><div style="font-size:15px;font-weight:600">Konten Beranda</div></div>
+      <div class="editor-block">
+        <div class="field-row"><div class="field-label">Judul Hero (HTML diizinkan untuk &lt;span&gt;)</div><textarea class="paste-area" id="hero-title-edit" rows="3"></textarea></div>
+        <div class="field-row"><div class="field-label">Sub-judul Hero</div><textarea class="paste-area" id="hero-sub-edit" rows="3"></textarea></div>
+        <div class="divider"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px">
+          <div class="field-row"><div class="field-label">Statistik 1 (angka)</div><input class="inline-edit" id="stat1-edit"></div>
+          <div class="field-row"><div class="field-label">Statistik 2 (angka)</div><input class="inline-edit" id="stat2-edit"></div>
+          <div class="field-row"><div class="field-label">Statistik 3 (angka)</div><input class="inline-edit" id="stat3-edit"></div>
+        </div>
+        <button class="btn-save" onclick="saveHero()"><i class="ti ti-check"></i> Simpan Beranda</button>
+      </div>
+    </div>
+
+    <!-- API KEY -->
+    <div class="admin-section" id="as-api">
+      <div class="api-key-box">
+        <h4><i class="ti ti-alert-triangle"></i> Keamanan API Key</h4>
+        <p>API key disimpan hanya di <strong>localStorage browser ini</strong>, tidak dikirim ke server manapun selain langsung ke api.anthropic.com. Gunakan restricted API key dengan budget limit untuk keamanan optimal.</p>
+      </div>
+      <div class="editor-block">
+        <div class="field-row"><div class="field-label">Anthropic API Key</div>
+          <div class="api-input-row">
+            <input type="password" id="api-key-input" placeholder="sk-ant-...">
+            <button class="btn-edit" onclick="toggleApiKeyVisibility()"><i class="ti ti-eye" id="api-eye-icon"></i></button>
+            <button class="btn-save" onclick="saveApiKey()"><i class="ti ti-check"></i> Simpan</button>
+          </div>
+          <div class="api-status" id="api-status"><span class="dot-status dot-no"></span><span>Belum diset</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- KELOLA USER (Firebase Auth) -->
+    <div class="admin-section" id="as-users">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div>
+          <div style="font-size:15px;font-weight:600">Kelola User Akun</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">Tambah, ubah peran, atau hapus akun karyawan dan admin</div>
+        </div>
+        <button class="btn-add" onclick="toggleAddUserForm()"><i class="ti ti-plus"></i> Tambah User</button>
+      </div>
+
+      <!-- Info box -->
+      <div style="background:rgba(107,203,255,0.07);border:1px solid rgba(107,203,255,0.2);border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:rgba(255,255,255,0.75);display:flex;gap:10px;align-items:flex-start">
+        <i class="ti ti-info-circle" style="color:var(--c3);margin-top:1px;flex-shrink:0"></i>
+        <div>Login menggunakan <b>Firebase Authentication</b>. Password user baru dikirim ke email mereka via reset link. Role <b>admin</b> = akses panel admin, role <b>employee</b> = akses fitur karyawan biasa.</div>
+      </div>
+
+      <!-- Form tambah user -->
+      <div class="add-user-form" id="add-user-form">
+        <div style="font-size:14px;font-weight:600;margin-bottom:14px;color:var(--white)"><i class="ti ti-user-plus"></i> Tambah User Baru</div>
+        <div class="add-user-grid">
+          <div class="field-row"><div class="field-label">Nama Lengkap</div><input class="inline-edit" id="new-user-name" placeholder="Andi Kurniawan"></div>
+          <div class="field-row"><div class="field-label">Email</div><input class="inline-edit" id="new-user-email" type="email" placeholder="andi@luzie.id"></div>
+          <div class="field-row"><div class="field-label">Password Sementara</div><input class="inline-edit" id="new-user-pass" type="password" placeholder="Min. 6 karakter"></div>
+          <div class="field-row"><div class="field-label">Departemen & Jabatan</div><input class="inline-edit" id="new-user-dept" placeholder="Marketing — SEO Specialist"></div>
+        </div>
+        <div class="field-row" style="margin-bottom:14px">
+          <div class="field-label">Role / Peran</div>
+          <div style="display:flex;gap:10px;margin-top:6px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+              <input type="radio" name="new-user-role" value="employee" checked style="accent-color:var(--c1)"> Karyawan (employee)
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+              <input type="radio" name="new-user-role" value="admin" style="accent-color:var(--c1)"> Admin (admin)
+            </label>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <button class="btn-save" onclick="createNewUser()"><i class="ti ti-user-check"></i> Buat Akun</button>
+          <button class="btn-edit" onclick="toggleAddUserForm()">Batal</button>
+          <span id="create-user-status" style="font-size:12px;color:var(--muted)"></span>
+        </div>
+        <p class="paste-hint" style="margin-top:10px">⚠️ Setelah akun dibuat, kamu bisa kirim reset password link ke email user agar mereka bisa set password sendiri.</p>
+      </div>
+
+      <!-- Tabel user list -->
+      <div class="editor-block" style="padding:0;overflow:hidden;margin-top:16px">
+        <div style="padding:16px 20px;border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:13px;font-weight:600">Daftar Akun Terdaftar</div>
+          <button class="btn-edit" onclick="loadUserList()" id="refresh-users-btn"><i class="ti ti-refresh"></i> Refresh</button>
+        </div>
+        <div id="user-list-wrap" style="padding:16px 20px">
+          <div style="text-align:center;padding:32px;color:var(--muted);font-size:13px">
+            <i class="ti ti-users" style="font-size:28px;display:block;margin-bottom:8px;opacity:.4"></i>
+            Klik <b>Refresh</b> untuk memuat daftar user.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MENU KUSTOM -->
+    <div class="admin-section" id="as-custommenu">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div>
+          <div style="font-size:15px;font-weight:600">Menu Kustom Navbar</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">Menu akan otomatis muncul di navigasi atas website setelah disimpan.</div>
+        </div>
+        <button class="btn-add" onclick="addCustomMenu()"><i class="ti ti-plus"></i> Tambah Menu</button>
+      </div>
+
+      <!-- Info box -->
+      <div style="background:rgba(107,203,255,0.07);border:1px solid rgba(107,203,255,0.2);border-radius:10px;padding:12px 16px;margin-bottom:20px;font-size:13px;color:rgba(255,255,255,0.75);display:flex;gap:10px;align-items:flex-start">
+        <i class="ti ti-info-circle" style="color:var(--c3);margin-top:1px;flex-shrink:0"></i>
+        <div>Masukkan <b>nama menu</b> yang akan tampil di navbar, dan <b>URL/link tujuan</b> saat diklik. Link bisa ke halaman luar (https://...) atau sistem internal perusahaan. Menu akan terbuka di tab baru.</div>
+      </div>
+
+      <!-- Table header -->
+      <div style="display:grid;grid-template-columns:1fr 2fr auto auto;gap:10px;padding:8px 12px;background:var(--dark3);border-radius:8px;margin-bottom:8px">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)">Nama Menu</div>
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)">URL / Link Tautan</div>
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)">Status</div>
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)">Aksi</div>
+      </div>
+
+      <div id="custommenu-editor">
+        <div style="text-align:center;padding:32px;color:var(--muted);font-size:13px">
+          <i class="ti ti-link" style="font-size:28px;display:block;margin-bottom:8px;opacity:.4"></i>
+          Belum ada menu kustom. Klik <b>"Tambah Menu"</b> untuk mulai.
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:16px">
+        <button class="btn-save" onclick="saveCustomMenu()"><i class="ti ti-check"></i> Simpan & Terapkan ke Navbar</button>
+      </div>
+    </div>
+
+
+    <!-- COPY LINK / SHARE MENU -->
+    <div class="admin-section" id="as-sharelink">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div>
+          <div style="font-size:15px;font-weight:600">Copy Link Halaman</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">Salin link langsung ke halaman-halaman utama portal untuk dibagikan atau dijadikan menu.</div>
+        </div>
+      </div>
+
+      <!-- Info box -->
+      <div style="background:rgba(168,240,160,0.07);border:1px solid rgba(168,240,160,0.2);border-radius:10px;padding:12px 16px;margin-bottom:20px;font-size:13px;color:rgba(255,255,255,0.75);display:flex;gap:10px;align-items:flex-start">
+        <i class="ti ti-info-circle" style="color:#A8F0A0;margin-top:1px;flex-shrink:0"></i>
+        <div>Klik tombol <b>Salin</b> pada setiap halaman untuk menyalin link langsung. Link bisa langsung ditempel ke <b>Menu Kustom</b> agar tampil di navbar, atau dibagikan ke karyawan via WhatsApp / email.</div>
+      </div>
+
+      <!-- Link cards -->
+      <div id="sharelink-list" style="display:flex;flex-direction:column;gap:10px"></div>
+
+      <!-- Divider -->
+      <div class="divider" style="margin:24px 0"></div>
+
+      <!-- Custom URL box -->
+      <div class="editor-block" style="padding:18px 20px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:12px;color:var(--white)"><i class="ti ti-link-plus"></i> Buat Link Kustom</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:14px">Tambahkan parameter halaman secara manual, lalu salin hasilnya.</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="custom-link-page" style="flex:0 0 180px;background:var(--dark3);border:1px solid rgba(255,255,255,0.12);border-radius:8px;color:var(--white);padding:8px 10px;font-size:13px;font-family:var(--font-body)">
+            <option value="home">🏠 Beranda</option>
+            <option value="policy">📋 Kebijakan</option>
+            <option value="pkwt">📄 PKWT/PKWTT</option>
+            <option value="org">🏢 Organisasi</option>
+            <option value="form">📝 Form Pengajuan</option>
+            <option value="chat">🤖 HR Assistant</option>
+            <option value="faq">❓ FAQ</option>
+          </select>
+          <input id="custom-link-output" class="inline-edit" style="flex:1" readonly placeholder="Pilih halaman di kiri, lalu klik Generate ▶">
+          <button class="btn-edit" onclick="generateCustomLink()" style="white-space:nowrap"><i class="ti ti-refresh"></i> Generate</button>
+          <button class="btn-save" onclick="copyCustomLink()" style="white-space:nowrap"><i class="ti ti-copy"></i> Salin</button>
+        </div>
+      </div>
+
+      <!-- Quick add to custom menu -->
+      <div style="margin-top:16px;padding:14px 16px;background:rgba(255,92,53,0.06);border:1px solid rgba(255,92,53,0.18);border-radius:10px;font-size:13px;color:rgba(255,255,255,0.7);display:flex;align-items:center;gap:10px">
+        <i class="ti ti-bulb" style="color:var(--c1);font-size:18px;flex-shrink:0"></i>
+        <span>Tip: Setelah menyalin link, buka tab <b>🔗 Menu Kustom</b> → klik <b>Tambah Menu</b> → paste link tersebut agar muncul langsung di navbar portal.</span>
+        <button class="btn-edit" style="margin-left:auto;white-space:nowrap;flex-shrink:0" onclick="switchAdmin('custommenu')"><i class="ti ti-arrow-right"></i> Ke Menu Kustom</button>
+      </div>
+    </div>
+
+
+    <!-- KELOLA TAB -->
+    <div class="admin-section" id="as-__manage__">
+      <div style="font-size:15px;font-weight:600;margin-bottom:4px">⚙️ Kelola Tab Admin</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:20px">Sembunyikan atau tampilkan tab yang tidak diperlukan. Perubahan tersimpan otomatis di browser ini.</div>
+      <div id="manage-tabs-list" style="display:flex;flex-direction:column;gap:8px"></div>
+      <div style="margin-top:20px;display:flex;gap:10px">
+        <button class="btn-save" onclick="saveHiddenTabs()"><i class="ti ti-check"></i> Simpan</button>
+        <button class="btn-edit" onclick="resetHiddenTabs()"><i class="ti ti-refresh"></i> Reset Semua</button>
+      </div>
+    </div>
+
+  </div><!-- end admin-wrap -->
+</div>
+
+<footer>
+  <div>© 2025 Luzie Group — HR Portal v2.0</div>
+  <div style="display:flex;gap:20px">
+    <a href="#">Kebijakan Privasi</a>
+    <a href="#">Kontak HRD</a>
+    <a href="#" onclick="showPage('chat');return false">HR Assistant</a>
+  </div>
+</footer>
+
+<!-- LOGIN MODAL -->
+<div class="modal-overlay" id="login-modal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeLogin()"><i class="ti ti-x"></i></button>
+    <h2>Masuk ke Portal HR</h2>
+    <p>Gunakan email dan password akun kamu yang telah didaftarkan.</p>
+    <div class="modal-field"><label>Email</label><input type="email" id="login-email" placeholder="nama@luzie.id" autocomplete="email"></div>
+    <div class="modal-field"><label>Password</label><input type="password" id="login-pass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()" autocomplete="current-password"></div>
+    <button class="modal-submit" id="login-submit-btn" onclick="doLogin()">Masuk</button>
+    <div class="modal-error" id="login-error">Email atau password salah.</div>
+    <p class="modal-note" style="margin-top:12px;cursor:pointer;color:var(--c3)" onclick="doForgotPassword()"><i class="ti ti-mail"></i> Lupa password? Kirim reset link</p>
+    <p class="modal-note">Belum punya akun? Hubungi HRD / Admin.</p>
+  </div>
+</div>
+
+<!-- IMPORT MODAL -->
+<div class="modal-overlay" id="import-modal">
+  <div class="modal" style="width:500px">
+    <button class="modal-close" onclick="document.getElementById('import-modal').classList.remove('show')"><i class="ti ti-x"></i></button>
+    <h2>Import Data JSON</h2>
+    <p>Paste JSON yang diekspor sebelumnya untuk mengembalikan semua konten.</p>
+    <textarea class="paste-area" id="import-json-area" rows="10" style="margin-bottom:12px"></textarea>
+    <button class="modal-submit" onclick="doImport()">Import & Terapkan</button>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"><i class="ti ti-check"></i><span id="toast-msg">Tersimpan</span></div>
+
+<script>
+// ══════════════════════════════════════════
+// DEFAULT DATA
+// ══════════════════════════════════════════
+const DEFAULT_DATA = {
+  policies: [
+    { cat:"Cuti & Izin", items:[
+      { title:"Cuti Tahunan", updated:"Berlaku sejak 1 Jan 2025", points:["Karyawan mendapat 12 hari cuti tahunan setelah bekerja minimal 12 bulan","Pengajuan minimal H-3 melalui portal HR ini","Cuti tidak dapat diakumulasi melebihi 2 tahun","Cuti bersama mengikuti kalender resmi perusahaan","Cuti dapat dibagi minimum 1 hari per pengambilan"], penalty:"Pengajuan cuti tanpa prosedur akan dianggap mangkir dan berdampak pada potongan gaji" },
+      { title:"Cuti Khusus", updated:"Berlaku sejak 1 Jan 2025", points:["Menikah: 3 hari kerja","Istri melahirkan/keguguran: 2 hari","Orang tua/suami/istri/anak meninggal: 2 hari","Anggota keluarga serumah meninggal: 1 hari","Ibadah haji/umroh: sesuai kebutuhan (maks. 40 hari)"], penalty:"Diperlukan bukti pendukung (undangan, akta, dll)" }
+    ]},
+    { cat:"Jam Kerja", items:[
+      { title:"Jam Kerja & Kehadiran", updated:"Berlaku sejak 1 Mar 2025", points:["Jam kerja: Senin–Jumat 08.00–17.00 WIB","Toleransi keterlambatan: 10 menit/hari","Lebih dari 10 menit = terlambat dan dicatat sistem","WFH diperbolehkan maks. 2 hari/minggu dengan persetujuan atasan","Absen wajib melalui aplikasi HRIS, selfie + lokasi"], penalty:"Keterlambatan 3× dalam sebulan = SP 1 tertulis" },
+      { title:"Lembur", updated:"Berlaku sejak 1 Jan 2025", points:["Lembur wajib mendapat persetujuan atasan sehari sebelumnya","Kompensasi lembur: 1,5× upah/jam (jam 1–7), 2× (jam selanjutnya)","Lembur hari libur/Minggu dihitung 2× sejak jam pertama","Maks. lembur: 4 jam/hari dan 18 jam/minggu","Klaim lembur diajukan melalui portal paling lambat 3 hari sesudahnya"], penalty:"Lembur tanpa persetujuan tidak mendapat kompensasi" }
+    ]},
+    { cat:"Dress Code", items:[
+      { title:"Pakaian Kerja", updated:"Berlaku sejak 1 Jan 2025", points:["Senin–Kamis: formal atau smart casual (kemeja, celana bahan/rok)","Jumat: casual, namun tetap sopan dan rapi","Dilarang: sandal jepit, kaos tanpa kerah (Senin–Kamis), celana sobek","ID card wajib dipakai selama berada di area kantor","Untuk kunjungan klien: wajib formal penuh"], penalty:"Ditegur langsung HRD. Pelanggaran berulang masuk catatan kinerja" }
+    ]},
+    { cat:"Teknologi & IT", items:[
+      { title:"Penggunaan Perangkat & Internet", updated:"Berlaku sejak 1 Jun 2025", points:["Perangkat kantor hanya untuk keperluan pekerjaan","Dilarang menginstall software tidak berlisensi di perangkat kantor","Internet kantor dilarang untuk streaming hiburan, download ilegal, atau konten tidak pantas","Data klien bersifat RAHASIA dan tidak boleh disebarkan ke pihak luar","Insiden keamanan siber wajib dilaporkan ke IT dalam 1 jam"], penalty:"Pelanggaran berat dapat berujung pada PHK sesuai pasal perjanjian kerja" }
+    ]},
+    { cat:"Disiplin & Sanksi", items:[
+      { title:"Tingkatan Sanksi", updated:"Berlaku sejak 1 Jan 2025", points:["Teguran lisan: pelanggaran ringan pertama kali","SP 1: pelanggaran ringan berulang atau pelanggaran sedang","SP 2: pelanggaran berat atau SP 1 tidak diindahkan","SP 3 / PHK: pelanggaran sangat berat atau SP 2 tidak diindahkan","Setiap sanksi didokumentasikan dalam file karyawan"], penalty:"Karyawan berhak mengajukan banding ke atasan dalam 7 hari kerja" }
+    ]}
+  ],
+  announcements: [
+    { title:"Jadwal Libur Nasional & Cuti Bersama 2025", date:"20 Des 2024", cat:"Info", catColor:"rgba(107,203,255,0.15)", catText:"#6BCBFF", desc:"Total 27 hari libur nasional dan 10 hari cuti bersama tahun 2025 telah ditetapkan." },
+    { title:"Update Kebijakan WFH mulai Maret 2025", date:"25 Feb 2025", cat:"Update", catColor:"rgba(255,217,61,0.15)", catText:"#FFD93D", desc:"WFH kini diperbolehkan hingga 2 hari/minggu. Persetujuan atasan tetap diperlukan." },
+    { title:"Pendaftaran BPJS Kesehatan Batch Q1 2025", date:"5 Jan 2025", cat:"Penting", catColor:"rgba(255,92,53,0.15)", catText:"#FF5C35", desc:"Karyawan yang belum terdaftar BPJS wajib melengkapi dokumen sebelum 31 Januari 2025." },
+    { title:"Program Pelatihan Digital Marketing Q2 2025", date:"1 Apr 2025", cat:"Program", catColor:"rgba(168,240,160,0.15)", catText:"#A8F0A0", desc:"Pelatihan wajib untuk semua tim kreatif dan digital. Jadwal menyusul via email." }
+  ],
+  faqs: [
+    { q:"Bagaimana cara mengajukan cuti tahunan?", a:"Login ke portal HR ini → klik menu 'Pengajuan' → pilih 'Cuti' → isi form dengan lengkap (tanggal, alasan, pengganti jika ada) → submit. HRD akan memproses dalam 1×24 jam kerja." },
+    { q:"Apakah saldo cuti bisa hangus?", a:"Cuti tahunan tidak bisa diakumulasi lebih dari 2 tahun. Sisa cuti yang melebihi batas tersebut akan otomatis hangus di akhir tahun ke-2." },
+    { q:"Berapa batas maksimal keterlambatan?", a:"Toleransi keterlambatan adalah 10 menit per hari. Keterlambatan lebih dari itu akan dicatat sistem. Jika keterlambatan terjadi 3 kali dalam satu bulan, karyawan akan mendapat SP 1 tertulis." },
+    { q:"Apakah WFH harus disetujui setiap minggunya?", a:"Ya, WFH memerlukan persetujuan atasan langsung. Pengajuan bisa melalui grup divisi atau email langsung ke atasan, paling lambat sehari sebelumnya." },
+    { q:"Apa bedanya PKWT dan PKWTT?", a:"PKWT (Perjanjian Kerja Waktu Tertentu) adalah kontrak berbatas waktu, biasanya untuk pekerjaan yang bersifat sementara. PKWTT adalah kontrak karyawan tetap yang tidak memiliki batas waktu." },
+    { q:"Bagaimana cara klaim lembur?", a:"Lembur harus disetujui atasan sebelum dilaksanakan. Setelah lembur selesai, ajukan klaim melalui form 'Lembur' di portal ini paling lambat 3 hari setelah lembur dilakukan." },
+    { q:"Ke mana saya harus melapor jika ada pertanyaan?", a:"Hubungi HRD langsung via email hrd@lusie atau ext. 101 (jam kerja). Untuk pertanyaan cepat, gunakan HR Assistant AI di menu 'HR Assistant'." }
+  ],
+  employees: [
+    { type:"PKWT", typeColor:"var(--c3)", name:"Andi Kurniawan", dept:"Digital Marketing — SEO Specialist", rows:[{label:"Mulai Kontrak",val:"1 Maret 2024"},{label:"Berakhir",val:"28 Feb 2026"},{label:"Durasi",val:"2 tahun"},{label:"Status",val:"badge-active|Aktif"}] },
+    { type:"PKWT", typeColor:"var(--c3)", name:"Lestari Wulandari", dept:"Creative — Graphic Designer", rows:[{label:"Mulai Kontrak",val:"1 Juli 2024"},{label:"Berakhir",val:"30 Jun 2025"},{label:"Durasi",val:"1 tahun"},{label:"Status",val:"badge-end|Akan Berakhir"}] },
+    { type:"PKWTT", typeColor:"var(--c4)", name:"Rina Putri", dept:"Creative — Head of Creative", rows:[{label:"Bergabung",val:"1 Jan 2020"},{label:"Durasi",val:"Tidak terbatas"},{label:"Masa Percobaan",val:"Selesai"},{label:"Status",val:"badge-permanent|Karyawan Tetap"}] }
+  ],
+  tickerItems: ["📢 Cuti bersama Idul Adha 6-7 Jun 2025","🏠 WFH maks. 2 hari/minggu — persetujuan atasan wajib","💰 THR akan dibayarkan H-7 Idul Fitri","📋 Peraturan baru dress code berlaku 1 Jan 2025","🎓 Pelatihan Digital Q2 — daftar sebelum 15 Apr","❤️ BPJS Kesehatan — pastikan data Anda sudah terdaftar"],
+  orgSubtitle: "Luzie Group — per Januari 2025",
+  orgLevels: [
+    [{ name:"Budi Santoso", role:"Chief Executive Officer", dept:"CEO", isCeo:true }],
+    [{ name:"Rina Putri", role:"Head of Creative", dept:"Creative", deptColor:"var(--c3)" },{ name:"Dimas Eka", role:"Head of Digital", dept:"Digital", deptColor:"var(--c4)" },{ name:"Sari Dewi", role:"HRD Manager", dept:"HRD", deptColor:"var(--c2)" },{ name:"Fajar Nugroho", role:"Finance Manager", dept:"Finance", deptColor:"var(--c1)" }],
+    [{ name:"Tim Desain", role:"3 anggota" },{ name:"Tim Konten", role:"4 anggota" },{ name:"Tim SEO/SEM", role:"3 anggota" },{ name:"Social Media", role:"3 anggota" },{ name:"HRD Staff", role:"2 anggota" },{ name:"Finance Staff", role:"2 anggota" }]
+  ],
+  heroTitle: 'Semua Info HR<br>di Satu <span class="accent">Tempat</span><br><span class="accent2">Kapan Saja</span>',
+  heroSub: "Akses peraturan, ajukan cuti & lembur, tanya AI, dan pantau informasi HR perusahaan secara mandiri — kapanpun, di manapun.",
+  stats: ["27","12","24/7"],
+  credentials: { name:"Andi Kurniawan", email:"andi@pixelpulse.id", password:"12345", adminEmail:"hrd@luzie", adminPassword:"admin123" },
+  customMenus: []
+};
+
+// ══════════════════════════════════════════
+// STATE & STORAGE
+// ══════════════════════════════════════════
+// STATE & STORAGE (Firebase + localStorage fallback)
+// ══════════════════════════════════════════
+function loadData() {
+  try {
+    const saved = localStorage.getItem('hrportal_data');
+    if (saved) return JSON.parse(saved);
+  } catch(e){}
+  return JSON.parse(JSON.stringify(DEFAULT_DATA));
+}
+
+async function saveData() {
+  // Sync window.appData dari appData lokal agar _fbPushToCloud baca data terbaru
+  window.appData = appData;
+  // 1. Simpan lokal dulu (cepat, offline-safe)
+  localStorage.setItem('hrportal_data', JSON.stringify(appData));
+  // 2. Push ke Firebase cloud jika tersedia
+  if (window._fbPushToCloud) {
+    if (window._showFbStatus) window._showFbStatus('saving');
+    try {
+      await window._fbPushToCloud();
+      showToast('Perubahan tersimpan & disinkronkan ☁️', 'success');
+    } catch(e) {
+      showToast('⚠️ Gagal sync ke cloud! Cek koneksi.', 'error');
+    }
+  } else {
+    showToast('Tersimpan (offline)', 'success');
+  }
+}
+function getApiKey() { return localStorage.getItem('hrportal_apikey') || ''; }
+function saveApiKeyStore(k) { localStorage.setItem('hrportal_apikey', k); }
+
+let appData = loadData();
+let isLoggedIn = false;
+let isAdmin = false;
+let pendingPage = null;
+let activePolicyCat = 0;
+
+// ── Callback dari Firebase onSnapshot (module script) ──
+// Ini jembatan antara module scope (Firebase) dan main script scope (appData lokal)
+window._onRemoteData = function(rawJson) {
+  try {
+    const parsed = JSON.parse(rawJson);
+    // Update appData lokal (yang dipakai semua render functions)
+    appData = parsed;
+    renderAll();
+    if (window._isAdminPageOpen && typeof renderAdmin === 'function') renderAdmin();
+  } catch(e) {
+    console.warn('[HR Portal] Gagal parse data dari Firebase:', e);
+  }
+};
+
+// Proses data yang datang sebelum callback ini terdaftar (race condition fix)
+if (window._pendingRemoteData) {
+  window._onRemoteData(window._pendingRemoteData);
+  window._pendingRemoteData = null;
+}
+
+// ── Tampilkan loading overlay sampai Firebase Auth siap ──
+window.addEventListener('DOMContentLoaded', () => {
+  const overlay = document.getElementById('auth-loading');
+  if (overlay) overlay.style.display = 'flex';
+  // Timeout fallback: jika Firebase tidak merespons dalam 8 detik
+  setTimeout(() => {
+    if (overlay && overlay.style.display !== 'none') {
+      overlay.style.display = 'none';
+    }
+  }, 8000);
+});
+
+// ══════════════════════════════════════════
+// NAVIGATION
+// ══════════════════════════════════════════
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-'+id).classList.add('active');
+  document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+  const nl = document.getElementById('nl-'+id);
+  if (nl) nl.classList.add('active');
+  window.scrollTo(0,0);
+  window._isAdminPageOpen = (id === 'admin');
+  if (id==='policy') renderPolicy();
+  if (id==='admin') renderAdmin();
+}
+function requireLogin(page) {
+  if (isLoggedIn) { showPage(page); return; }
+  pendingPage = page;
+  openLogin();
+}
+function requireAdmin(page) {
+  if (isAdmin) { showPage(page); return; }
+  pendingPage = '__admin__'+page;
+  openLogin();
+}
+
+// ══════════════════════════════════════════
+// AUTH — Firebase Authentication
+// ══════════════════════════════════════════
+function openLogin() {
+  document.getElementById('login-modal').classList.add('show');
+  document.getElementById('login-error').style.display='none';
+  document.getElementById('login-submit-btn').textContent = 'Masuk';
+  document.getElementById('login-submit-btn').disabled = false;
+}
+function closeLogin() {
+  document.getElementById('login-modal').classList.remove('show');
+  pendingPage=null;
+}
+
+async function doLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const pass  = document.getElementById('login-pass').value;
+  const errEl = document.getElementById('login-error');
+  const btn   = document.getElementById('login-submit-btn');
+
+  if (!email || !pass) {
+    errEl.textContent = 'Email dan password wajib diisi.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  // ── LOGIN LOKAL SEMENTARA ──
+  if (email === 'admin@luzie.com' && pass === 'admin123') {
+    window._currentUser = { uid: 'local-admin', email: email, name: 'Admin HRD', role: 'admin', dept: 'HRD' };
+    window._isLoggedIn  = true;
+    window._isAdmin     = true;
+    if (typeof onAuthReady === 'function') onAuthReady();
+    return;
+  }
+
+  btn.textContent = 'Masuk...';
+  btn.disabled = true;
+  errEl.style.display = 'none';
+
+  try {
+    await window._fbSignIn(email, pass);
+    // onAuthStateChanged akan handle sisanya via onAuthReady()
+  } catch(e) {
+    btn.textContent = 'Masuk';
+    btn.disabled = false;
+    let msg = 'Email atau password salah.';
+    if (e.code === 'auth/too-many-requests') msg = 'Terlalu banyak percobaan. Coba lagi nanti.';
+    if (e.code === 'auth/user-disabled') msg = 'Akun ini telah dinonaktifkan.';
+    errEl.textContent = msg;
+    errEl.style.display = 'block';
+  }
+}
+
+async function doForgotPassword() {
+  const email = document.getElementById('login-email').value.trim();
+  if (!email) {
+    showToast('Isi email dulu sebelum reset password.', 'error');
+    return;
+  }
+  try {
+    await window._fbSendPasswordReset(email);
+    showToast('Link reset password dikirim ke ' + email, 'success');
+  } catch(e) {
+    showToast('Gagal kirim reset link. Pastikan email terdaftar.', 'error');
+  }
+}
+
+// Dipanggil oleh Firebase onAuthStateChanged saat login berhasil
+function onAuthReady() {
+  isLoggedIn = window._isLoggedIn;
+  isAdmin    = window._isAdmin;
+  const user = window._currentUser;
+
+  // Sembunyikan loading overlay
+  const overlay = document.getElementById('auth-loading');
+  if (overlay) overlay.style.display = 'none';
+
+  // Update navbar badge
+  const initials = (user.name || user.email).split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  setUserBadge(user.name || user.email.split('@')[0], initials);
+
+  closeLogin();
+
+  if (pendingPage && pendingPage.startsWith('__admin__')) {
+    if (isAdmin) showPage(pendingPage.replace('__admin__',''));
+    else showToast('Akses admin ditolak.', 'error');
+  } else if (pendingPage) {
+    showPage(pendingPage);
+  }
+  pendingPage = null;
+  // Realtime sync sudah aktif via onSnapshot di firebase module — tidak perlu startRealtimeSync()
+}
+
+// Dipanggil saat user logout (dari Firebase)
+function onAuthStateLoggedOut() {
+  isLoggedIn = false;
+  isAdmin    = false;
+  const overlay = document.getElementById('auth-loading');
+  if (overlay) overlay.style.display = 'none';
+  document.getElementById('btn-login-nav').style.display = 'block';
+  document.getElementById('user-badge').style.display    = 'none';
+  showPage('home');
+}
+
+function setUserBadge(displayName, initials) {
+  document.getElementById('btn-login-nav').style.display = 'none';
+  document.getElementById('user-badge').style.display    = 'flex';
+  document.getElementById('user-name-nav').textContent   = displayName;
+  document.getElementById('user-avatar').textContent     = initials.slice(0,2);
+  document.getElementById('nl-admin').style.display      = isAdmin ? 'block' : 'none';
+}
+
+async function logout() {
+  try {
+    await window._fbSignOut();
+    // onAuthStateLoggedOut handles UI
+  } catch(e) {
+    showToast('Gagal logout.', 'error');
+  }
+}
+
+// ══════════════════════════════════════════
+// HOME RENDER
+// ══════════════════════════════════════════
+function renderHome() {
+  // Ticker
+  const t = document.getElementById('ticker-content');
+  const items = [...appData.tickerItems,...appData.tickerItems].map(i=>`<span class="ticker-item"><span class="ticker-dot"></span>${i}</span>`).join('');
+  t.innerHTML = items;
+  // Announcements
+  const ac = document.getElementById('announcement-cards');
+  ac.innerHTML = appData.announcements.map(a=>`
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+        <span class="card-tag" style="background:${a.catColor};color:${a.catText}">${a.cat}</span>
+        <span style="font-size:11px;color:var(--muted)">${a.date}</span>
+      </div>
+      <div class="card-title" style="margin-bottom:8px">${a.title}</div>
+      <div class="card-desc">${a.desc}</div>
+    </div>`).join('');
+  // Hero
+  document.getElementById('hero-title').innerHTML = appData.heroTitle;
+  document.getElementById('hero-sub').textContent = appData.heroSub;
+  document.getElementById('stat1').textContent = appData.stats[0];
+  document.getElementById('stat2').textContent = appData.stats[1];
+  document.getElementById('stat3').textContent = appData.stats[2];
+}
+
+// ══════════════════════════════════════════
+// POLICY RENDER
+// ══════════════════════════════════════════
+function renderPolicy() {
+  const sidebar = document.getElementById('policy-cats');
+  sidebar.innerHTML = appData.policies.map((p,i)=>`
+    <button class="policy-nav-item ${i===activePolicyCat?'active':''}" onclick="selectPolicyCat(${i})">
+      <i class="ti ti-chevron-right" style="font-size:12px"></i> ${p.cat}
+    </button>`).join('');
+  renderPolicyContent();
+}
+function selectPolicyCat(i) { activePolicyCat=i; renderPolicy(); }
+function renderPolicyContent() {
+  const area = document.getElementById('policy-content-area');
+  const cat = appData.policies[activePolicyCat];
+  area.innerHTML = cat.items.map(item=>`
+    <div class="policy-block">
+      <h3>${item.title}</h3>
+      <div class="updated"><i class="ti ti-clock" style="font-size:11px"></i> ${item.updated}</div>
+      ${item.points.map(p=>`<div class="policy-list-item"><div class="policy-bullet"><i class="ti ti-check" style="font-size:10px"></i></div><div>${p}</div></div>`).join('')}
+      ${item.penalty?`<div class="policy-penalty"><i class="ti ti-alert-triangle" style="flex-shrink:0;margin-top:1px"></i><div><b>Catatan:</b> ${item.penalty}</div></div>`:''}
+    </div>`).join('');
+}
+
+// ══════════════════════════════════════════
+// PKWT RENDER
+// ══════════════════════════════════════════
+function renderPkwt() {
+  const container = document.getElementById('pkwt-cards');
+  container.innerHTML = appData.employees.map(emp=>{
+    const rows = emp.rows.map(r => {
+      if (r.val && r.val.includes('|')) {
+        const [cls,label] = r.val.split('|');
+        return `<div class="pkwt-row"><span class="label">${r.label}</span><span><span class="pkwt-badge ${cls}">${label}</span></span></div>`;
+      }
+      return `<div class="pkwt-row"><span class="label">${r.label}</span><span>${r.val}</span></div>`;
+    }).join('');
+    return `<div class="pkwt-card">
+      <div class="pkwt-type" style="color:${emp.typeColor}">${emp.type}</div>
+      <div class="pkwt-name">${emp.name}</div>
+      <div class="pkwt-dept">${emp.dept}</div>
+      <div class="pkwt-info">${rows}</div>
+    </div>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════
+// ORG RENDER
+// ══════════════════════════════════════════
+function renderOrg() {
+  document.getElementById('org-subtitle').textContent = appData.orgSubtitle;
+  const container = document.getElementById('org-chart');
+  let html = '';
+  appData.orgLevels.forEach((level, li) => {
+    if (li > 0) html += `<div style="display:flex;justify-content:center"><div style="width:1px;height:28px;background:rgba(255,255,255,0.1)"></div></div>`;
+    if (li === 1) html += `<div style="display:flex;justify-content:center;gap:0"><div style="width:480px;height:1px;background:rgba(255,255,255,0.1)"></div></div>`;
+    html += `<div class="org-level" style="${li===2?'flex-wrap:wrap;gap:16px;margin-top:8px':''}">`;
+    level.forEach(node => {
+      const wrapStyle = li===1 ? 'display:flex;flex-direction:column;align-items:center' : '';
+      const vline = li===1 ? `<div style="width:1px;height:24px;background:rgba(255,255,255,0.1)"></div>` : '';
+      const deptColor = node.deptColor || 'var(--c1)';
+      const nodeHtml = `<div class="org-node ${node.isCeo?'ceo':''}">
+        <div class="org-node-name">${node.name}</div>
+        <div class="org-node-role">${node.role}</div>
+        ${node.dept?`<div class="org-node-dept" style="color:${deptColor}">${node.dept}</div>`:''}
+      </div>`;
+      if (li===1) html += `<div style="${wrapStyle}">${vline}${nodeHtml}</div>`;
+      else html += nodeHtml;
+    });
+    html += `</div>`;
+  });
+  container.innerHTML = html;
+}
+
+// ══════════════════════════════════════════
+// FAQ RENDER
+// ══════════════════════════════════════════
+function renderFAQ() {
+  document.getElementById('faq-list').innerHTML = appData.faqs.map((f,i)=>`
+    <div class="faq-item">
+      <div class="faq-q" onclick="toggleFaq(${i})" id="fq-${i}">
+        <span>${f.q}</span><i class="ti ti-plus icon"></i>
+      </div>
+      <div class="faq-a" id="fa-${i}">${f.a}</div>
+    </div>`).join('');
+}
+function toggleFaq(i) {
+  document.getElementById('fq-'+i).classList.toggle('open');
+  document.getElementById('fa-'+i).classList.toggle('show');
+}
+
+// ══════════════════════════════════════════
+// FORM RENDER
+// ══════════════════════════════════════════
+const formDefs = {
+  cuti: { title:"Pengajuan Cuti", desc:"Isi formulir ini minimal 3 hari sebelum tanggal cuti.", fields:[
+    {label:"Jenis Cuti",id:"cuti-type",type:"select",opts:["Cuti Tahunan","Cuti Sakit","Cuti Melahirkan","Cuti Khusus"]},
+    {label:"Tanggal Mulai",id:"cuti-start",type:"date"},{label:"Tanggal Selesai",id:"cuti-end",type:"date"},
+    {label:"Keterangan / Alasan",id:"cuti-ket",type:"textarea",full:true},{label:"Pengganti Tugas (opsional)",id:"cuti-rep",type:"text",full:true}
+  ]},
+  lembur: { title:"Pengajuan Lembur", desc:"Diajukan minimal 1 hari sebelum lembur dilaksanakan.", fields:[
+    {label:"Tanggal Lembur",id:"lem-date",type:"date"},{label:"Estimasi Jam Mulai",id:"lem-start",type:"time"},
+    {label:"Estimasi Jam Selesai",id:"lem-end",type:"time"},{label:"Nama Atasan Penyetuju",id:"lem-mgr",type:"text"},
+    {label:"Deskripsi Pekerjaan",id:"lem-desc",type:"textarea",full:true}
+  ]},
+  reimburse: { title:"Reimbursement", desc:"Lampirkan bukti pembayaran saat menyerahkan form fisik ke HRD.", fields:[
+    {label:"Jenis Reimbursement",id:"rei-type",type:"select",opts:["Transport","Makan Klien","Pembelian ATK","Lainnya"]},
+    {label:"Tanggal Pengeluaran",id:"rei-date",type:"date"},{label:"Jumlah (Rp)",id:"rei-amount",type:"text",placeholder:"Cth: 150000"},
+    {label:"Keterangan",id:"rei-ket",type:"textarea",full:true}
+  ]},
+  izin: { title:"Izin Tidak Masuk", desc:"Untuk izin mendadak, hubungi atasan langsung via WhatsApp dan isi form ini.", fields:[
+    {label:"Tanggal Izin",id:"izin-date",type:"date"},{label:"Alasan",id:"izin-reason",type:"select",opts:["Sakit","Urusan Keluarga Mendesak","Mengurus Dokumen Penting","Lainnya"]},
+    {label:"Keterangan Lengkap",id:"izin-ket",type:"textarea",full:true}
+  ]}
+};
+function renderForm(type) {
+  const def = formDefs[type];
+  const fields = def.fields.map(f=>{
+    const full = f.full?'full':'';
+    let input = '';
+    if (f.type==='select') input=`<select class="form-select"><option value="">Pilih...</option>${f.opts.map(o=>`<option>${o}</option>`).join('')}</select>`;
+    else if (f.type==='textarea') input=`<textarea class="form-textarea" placeholder="${f.placeholder||''}"></textarea>`;
+    else input=`<input class="form-input" type="${f.type}" placeholder="${f.placeholder||''}">`;
+    return `<div class="form-group ${full}"><label class="form-label">${f.label}</label>${input}</div>`;
+  }).join('');
+  document.getElementById('form-area').innerHTML = `
+    <div class="form-box">
+      <h3>${def.title}</h3>
+      <p class="form-desc">${def.desc}</p>
+      <div class="form-grid">${fields}</div>
+      <button class="form-submit" onclick="submitForm()">Kirim Pengajuan ↗</button>
+      <p class="form-note">Pengajuan akan dikonfirmasi via email oleh HRD dalam 1×24 jam kerja</p>
+    </div>`;
+  document.querySelectorAll('.form-tab').forEach((t,i)=>{
+    t.classList.toggle('active', ['cuti','lembur','reimburse','izin'][i]===type);
+  });
+}
+function switchForm(type) { renderForm(type); }
+function submitForm() { showToast('✅ Pengajuan berhasil dikirim! HRD akan konfirmasi dalam 1×24 jam.', 'success'); }
+
+// ══════════════════════════════════════════
+// CHAT (HARA)
+// ══════════════════════════════════════════
+const chips = ["Berapa hari cuti saya?","Aturan WFH?","Cara klaim lembur?","Dress code Jumat?","PKWT vs PKWTT?","Sanksi jika terlambat?"];
+function renderChips() {
+  document.getElementById('chat-chips').innerHTML = chips.map(c=>`<span class="chip" onclick="setChat('${c}')">${c}</span>`).join('');
+}
+function setChat(t) { document.getElementById('chat-inp').value=t; document.getElementById('chat-inp').focus(); }
+function chatKey(e) { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();chatSend();} }
+function getTime() { return new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}); }
+
+function addChatMsg(role, text) {
+  const area = document.getElementById('chat-msgs');
+  const d = document.createElement('div');
+  d.className = 'msg '+role;
+  d.innerHTML = `<div class="msg-bubble">${text}</div><div class="msg-time">${getTime()}</div>`;
+  area.appendChild(d);
+  area.scrollTop = area.scrollHeight;
+}
+function showTyping() {
+  const area = document.getElementById('chat-msgs');
+  const d = document.createElement('div');
+  d.className='msg bot'; d.id='typing-ind';
+  d.innerHTML='<div class="msg-bubble"><div class="typing-dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>';
+  area.appendChild(d); area.scrollTop=area.scrollHeight;
+}
+function removeTyping() { const e=document.getElementById('typing-ind'); if(e) e.remove(); }
+
+async function chatSend() {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    addChatMsg('bot','⚠️ API key belum diset. Admin perlu mengisi API key di menu <b>Admin → API Key</b>.');
+    return;
+  }
+  const inp = document.getElementById('chat-inp');
+  const q = inp.value.trim(); if(!q) return;
+  inp.value='';
+  document.getElementById('chat-send-btn').disabled=true;
+  addChatMsg('user', q);
+  showTyping();
+  const policyContext = appData.policies.map(p=>p.items.map(i=>`[${p.cat}] ${i.title}:\n- ${i.points.join('\n- ')}\nSanksi: ${i.penalty||'-'}`).join('\n')).join('\n\n');
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages",{
+      method:"POST",
+      headers:{"Content-Type":"application/json","x-api-key": apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+      body: JSON.stringify({
+        model:"claude-sonnet-4-20250514", max_tokens:800,
+        system:`Kamu adalah HARA, HR Assistant resmi Luzie Group. Jawab pertanyaan karyawan tentang peraturan perusahaan dengan ramah, jelas, dan ringkas dalam Bahasa Indonesia. Gunakan data berikut:\n\n${policyContext}\n\nJika tidak ada di data, sarankan hubungi HRD langsung. Maks. 3 paragraf pendek.`,
+        messages:[{role:"user",content:q}]
+      })
+    });
+    const data = await res.json();
+    removeTyping();
+    if (data.error) { addChatMsg('bot',`⚠️ Error: ${data.error.message}`); }
+    else {
+      const ans = data.content?.[0]?.text || "Maaf, terjadi kesalahan. Silakan coba lagi.";
+      addChatMsg('bot', ans.replace(/\n/g,'<br>'));
+    }
+  } catch(e) { removeTyping(); addChatMsg('bot','Maaf, terjadi gangguan koneksi. Silakan coba lagi.'); }
+  document.getElementById('chat-send-btn').disabled=false;
+}
+
+// ══════════════════════════════════════════
+// TOAST
+// ══════════════════════════════════════════
+let toastTimer;
+function showToast(msg, type='success') {
+  const t = document.getElementById('toast');
+  const m = document.getElementById('toast-msg');
+  t.className = 'toast '+type;
+  m.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>t.classList.remove('show'), 2800);
+}
+
+// ══════════════════════════════════════════
+// ADMIN PANEL RENDER
+// ══════════════════════════════════════════
+function switchAdmin(tab) {
+  document.querySelectorAll('.admin-tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.admin-section').forEach(s=>s.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('as-'+tab).classList.add('active');
+  if (tab === 'users') loadUserList();
+  if (tab === 'sharelink') renderShareLinks();
+}
+
+function renderAdmin() {
+  renderAnnEditor();
+  renderTickerEditor();
+  renderPolicyEditor();
+  renderFaqEditor();
+  renderEmployeeEditor();
+  renderOrgEditor();
+  renderHeroEditor();
+  renderApiEditor();
+  renderCustomMenuEditor();
+  // User list dimuat saat tab diklik (via loadUserList())
+}
+
+// ── PENGUMUMAN EDITOR ──
+function renderAnnEditor() {
+  const c = document.getElementById('ann-editor');
+  c.innerHTML = appData.announcements.map((a,i)=>`
+    <div class="ann-card-edit">
+      <div class="ann-grid">
+        <div class="field-row"><div class="field-label">Judul</div><input class="inline-edit" value="${esc(a.title)}" oninput="appData.announcements[${i}].title=this.value"></div>
+        <div class="field-row"><div class="field-label">Tanggal</div><input class="inline-edit" value="${esc(a.date)}" oninput="appData.announcements[${i}].date=this.value"></div>
+        <div class="field-row"><div class="field-label">Label Kategori</div><input class="inline-edit" value="${esc(a.cat)}" oninput="appData.announcements[${i}].cat=this.value"></div>
+        <div class="field-row"><div class="field-label">Warna Teks Kategori</div><input class="inline-edit" value="${esc(a.catText)}" oninput="appData.announcements[${i}].catText=this.value" placeholder="#6BCBFF"></div>
+      </div>
+      <div class="field-row"><div class="field-label">Deskripsi</div><textarea class="paste-area" rows="2" oninput="appData.announcements[${i}].desc=this.value">${esc(a.desc)}</textarea></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+        <button class="btn-save" onclick="saveAndRefresh()"><i class="ti ti-check"></i> Simpan</button>
+        <button class="btn-danger" onclick="deleteAnnouncement(${i})"><i class="ti ti-trash"></i> Hapus</button>
+      </div>
+    </div>`).join('');
+}
+function addAnnouncement() {
+  appData.announcements.push({ title:"Pengumuman Baru", date:new Date().toLocaleDateString('id-ID'), cat:"Info", catColor:"rgba(107,203,255,0.15)", catText:"#6BCBFF", desc:"Isi deskripsi pengumuman di sini." });
+  saveAndRefresh();
+}
+function deleteAnnouncement(i) {
+  if (!confirm('Hapus pengumuman ini?')) return;
+  appData.announcements.splice(i,1);
+  saveAndRefresh();
+}
+
+// ── TICKER EDITOR ──
+function renderTickerEditor() {
+  const c = document.getElementById('ticker-editor');
+  c.innerHTML = `<div class="ticker-list">${appData.tickerItems.map((t,i)=>`
+    <div class="ticker-item-edit">
+      <input value="${esc(t)}" oninput="appData.tickerItems[${i}]=this.value">
+      <button class="btn-del-point" onclick="deleteTickerItem(${i})"><i class="ti ti-x"></i></button>
+    </div>`).join('')}</div>`;
+}
+function addTickerItem() { appData.tickerItems.push("🆕 Item ticker baru"); renderTickerEditor(); }
+function deleteTickerItem(i) { appData.tickerItems.splice(i,1); renderTickerEditor(); }
+function saveTicker() { saveAndRefresh(); }
+
+// ── POLICY EDITOR ──
+function renderPolicyEditor() {
+  const c = document.getElementById('policy-editor');
+  c.innerHTML = appData.policies.map((pol,pi)=>`
+    <div class="editor-block">
+      <div class="editor-block-header">
+        <div>
+          <div class="field-row" style="margin-bottom:0"><input class="inline-edit" value="${esc(pol.cat)}" oninput="appData.policies[${pi}].cat=this.value" style="font-weight:600;font-size:15px;background:transparent;border-color:transparent" placeholder="Nama Kategori"></div>
+        </div>
+        <div class="editor-actions">
+          <button class="btn-edit" onclick="addPolicyItem(${pi})"><i class="ti ti-plus"></i> Tambah Poin</button>
+          <button class="btn-danger" onclick="deletePolicyCat(${pi})"><i class="ti ti-trash"></i></button>
+        </div>
+      </div>
+      ${pol.items.map((item,ii)=>`
+        <div style="background:var(--dark3);border-radius:10px;padding:16px;margin-bottom:10px">
+          <div class="ann-grid" style="margin-bottom:10px">
+            <div class="field-row"><div class="field-label">Judul Kebijakan</div><input class="inline-edit" value="${esc(item.title)}" oninput="appData.policies[${pi}].items[${ii}].title=this.value"></div>
+            <div class="field-row"><div class="field-label">Tanggal Berlaku</div><input class="inline-edit" value="${esc(item.updated)}" oninput="appData.policies[${pi}].items[${ii}].updated=this.value"></div>
+          </div>
+          <div class="field-label" style="margin-bottom:6px">Poin-poin Kebijakan</div>
+          <div class="point-list" id="points-${pi}-${ii}">
+            ${item.points.map((pt,pti)=>`
+              <div class="point-item">
+                <input value="${esc(pt)}" oninput="appData.policies[${pi}].items[${ii}].points[${pti}]=this.value">
+                <button class="btn-del-point" onclick="delPoint(${pi},${ii},${pti})"><i class="ti ti-x"></i></button>
+              </div>`).join('')}
+          </div>
+          <button class="btn-add" style="margin-top:6px;padding:6px 12px;font-size:12px" onclick="addPoint(${pi},${ii})"><i class="ti ti-plus"></i> Tambah Poin</button>
+          <div class="field-row" style="margin-top:12px"><div class="field-label">Catatan Sanksi (opsional)</div>
+            <input class="inline-edit" value="${esc(item.penalty||'')}" oninput="appData.policies[${pi}].items[${ii}].penalty=this.value" placeholder="Tulis catatan sanksi...">
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:10px">
+            <button class="btn-save" onclick="saveAndRefresh()"><i class="ti ti-check"></i> Simpan</button>
+            <button class="btn-danger" onclick="deletePolicyItem(${pi},${ii})"><i class="ti ti-trash"></i> Hapus Kebijakan</button>
+          </div>
+        </div>`).join('')}
+    </div>`).join('');
+}
+function addPolicyCat() {
+  appData.policies.push({ cat:"Kategori Baru", items:[{ title:"Kebijakan Baru", updated:"Berlaku sejak "+new Date().getFullYear(), points:["Poin pertama kebijakan"], penalty:"" }] });
+  saveAndRefresh();
+}
+function deletePolicyCat(pi) { if(!confirm('Hapus kategori ini?')) return; appData.policies.splice(pi,1); saveAndRefresh(); }
+function addPolicyItem(pi) {
+  appData.policies[pi].items.push({ title:"Kebijakan Baru", updated:"Berlaku sejak "+new Date().getFullYear(), points:["Poin pertama"], penalty:"" });
+  saveAndRefresh();
+}
+function deletePolicyItem(pi,ii) { if(!confirm('Hapus kebijakan ini?')) return; appData.policies[pi].items.splice(ii,1); saveAndRefresh(); }
+function addPoint(pi,ii) { appData.policies[pi].items[ii].points.push("Poin baru"); renderPolicyEditor(); }
+function delPoint(pi,ii,pti) { appData.policies[pi].items[ii].points.splice(pti,1); renderPolicyEditor(); }
+
+// ── FAQ EDITOR ──
+function renderFaqEditor() {
+  const c = document.getElementById('faq-editor');
+  c.innerHTML = appData.faqs.map((f,i)=>`
+    <div class="editor-block" style="padding:18px">
+      <div class="field-row"><div class="field-label">Pertanyaan</div><input class="inline-edit" value="${esc(f.q)}" oninput="appData.faqs[${i}].q=this.value"></div>
+      <div class="field-row"><div class="field-label">Jawaban</div><textarea class="paste-area" rows="3" oninput="appData.faqs[${i}].a=this.value">${esc(f.a)}</textarea></div>
+      <div style="display:flex;justify-content:space-between;margin-top:8px">
+        <button class="btn-save" onclick="saveAndRefresh()"><i class="ti ti-check"></i> Simpan</button>
+        <button class="btn-danger" onclick="deleteFaq(${i})"><i class="ti ti-trash"></i></button>
+      </div>
+    </div>`).join('');
+}
+function addFaq() { appData.faqs.push({q:"Pertanyaan baru?",a:"Jawaban di sini."}); saveAndRefresh(); }
+function deleteFaq(i) { if(!confirm('Hapus FAQ ini?')) return; appData.faqs.splice(i,1); saveAndRefresh(); }
+
+// ── EMPLOYEE EDITOR ──
+function renderEmployeeEditor() {
+  const c = document.getElementById('employee-editor');
+  c.innerHTML = appData.employees.map((emp,ei)=>`
+    <div class="editor-block">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="display:flex;gap:10px;align-items:center;flex:1">
+          <select class="form-select" style="width:120px" onchange="appData.employees[${ei}].type=this.value">
+            <option ${emp.type==='PKWT'?'selected':''}>PKWT</option>
+            <option ${emp.type==='PKWTT'?'selected':''}>PKWTT</option>
+          </select>
+          <input class="inline-edit" style="font-weight:700;font-size:15px" value="${esc(emp.name)}" oninput="appData.employees[${ei}].name=this.value" placeholder="Nama Karyawan">
+        </div>
+        <button class="btn-danger" onclick="deleteEmployee(${ei})"><i class="ti ti-trash"></i></button>
+      </div>
+      <div class="field-row"><div class="field-label">Departemen & Jabatan</div><input class="inline-edit" value="${esc(emp.dept)}" oninput="appData.employees[${ei}].dept=this.value"></div>
+      <div class="field-label" style="margin:10px 0 6px">Baris Info</div>
+      ${emp.rows.map((row,ri)=>`
+        <div style="display:flex;gap:8px;margin-bottom:6px">
+          <input class="inline-edit" style="width:180px" value="${esc(row.label)}" oninput="appData.employees[${ei}].rows[${ri}].label=this.value" placeholder="Label">
+          <input class="inline-edit" style="flex:1" value="${esc(row.val)}" oninput="appData.employees[${ei}].rows[${ri}].val=this.value" placeholder="Nilai (badge: badge-active|Aktif)">
+          <button class="btn-del-point" onclick="appData.employees[${ei}].rows.splice(${ri},1);renderEmployeeEditor()"><i class="ti ti-x"></i></button>
+        </div>`).join('')}
+      <div style="display:flex;justify-content:space-between;margin-top:10px">
+        <div style="display:flex;gap:8px">
+          <button class="btn-save" onclick="saveAndRefresh()"><i class="ti ti-check"></i> Simpan</button>
+          <button class="btn-edit" onclick="appData.employees[${ei}].rows.push({label:'Label',val:'Nilai'});renderEmployeeEditor()"><i class="ti ti-plus"></i> Baris</button>
+        </div>
+      </div>
+      <div class="paste-hint" style="margin-top:8px">Badge tersedia: <code>badge-active|Aktif</code> / <code>badge-end|Akan Berakhir</code> / <code>badge-contract|Kontrak</code> / <code>badge-permanent|Tetap</code></div>
+    </div>`).join('');
+}
+function addEmployee() {
+  appData.employees.push({ type:"PKWT", typeColor:"var(--c3)", name:"Nama Karyawan", dept:"Departemen — Jabatan", rows:[{label:"Mulai Kontrak",val:"1 Jan 2025"},{label:"Berakhir",val:"31 Des 2025"},{label:"Status",val:"badge-active|Aktif"}] });
+  saveAndRefresh();
+}
+function deleteEmployee(i) { if(!confirm('Hapus karyawan ini?')) return; appData.employees.splice(i,1); saveAndRefresh(); }
+
+// ── ORG EDITOR ──
+function renderOrgEditor() {
+  document.getElementById('org-subtitle-edit').value = appData.orgSubtitle;
+  document.getElementById('org-json-edit').value = JSON.stringify(appData.orgLevels, null, 2);
+}
+function saveOrg() {
+  appData.orgSubtitle = document.getElementById('org-subtitle-edit').value;
+  try {
+    const parsed = JSON.parse(document.getElementById('org-json-edit').value);
+    appData.orgLevels = parsed;
+    saveAndRefresh();
+  } catch(e) { showToast('JSON tidak valid: '+e.message,'error'); }
+}
+function resetOrgExample() {
+  document.getElementById('org-json-edit').value = JSON.stringify(DEFAULT_DATA.orgLevels, null, 2);
+  showToast('Contoh JSON ditampilkan','success');
+}
+
+// ── HERO EDITOR ──
+function renderHeroEditor() {
+  document.getElementById('hero-title-edit').value = appData.heroTitle;
+  document.getElementById('hero-sub-edit').value = appData.heroSub;
+  document.getElementById('stat1-edit').value = appData.stats[0];
+  document.getElementById('stat2-edit').value = appData.stats[1];
+  document.getElementById('stat3-edit').value = appData.stats[2];
+}
+function saveHero() {
+  appData.heroTitle = document.getElementById('hero-title-edit').value;
+  appData.heroSub = document.getElementById('hero-sub-edit').value;
+  appData.stats = [document.getElementById('stat1-edit').value, document.getElementById('stat2-edit').value, document.getElementById('stat3-edit').value];
+  saveAndRefresh();
+}
+
+// ── API EDITOR ──
+function renderApiEditor() {
+  const key = getApiKey();
+  const inp = document.getElementById('api-key-input');
+  inp.value = key;
+  updateApiStatus(key);
+}
+function updateApiStatus(key) {
+  const el = document.getElementById('api-status');
+  if (key && key.startsWith('sk-ant-')) {
+    el.innerHTML = '<span class="dot-status dot-ok"></span><span style="color:var(--c4)">API Key tersimpan</span>';
+  } else if (key) {
+    el.innerHTML = '<span class="dot-status dot-wait"></span><span style="color:var(--c2)">Format tidak dikenali (harus diawali sk-ant-)</span>';
+  } else {
+    el.innerHTML = '<span class="dot-status dot-no"></span><span>Belum diset — HARA tidak dapat menjawab</span>';
+  }
+}
+function saveApiKey() {
+  const k = document.getElementById('api-key-input').value.trim();
+  saveApiKeyStore(k);
+  updateApiStatus(k);
+  showToast('API Key tersimpan','success');
+}
+function toggleApiKeyVisibility() {
+  const inp = document.getElementById('api-key-input');
+  const ico = document.getElementById('api-eye-icon');
+  if (inp.type==='password') { inp.type='text'; ico.className='ti ti-eye-off'; }
+  else { inp.type='password'; ico.className='ti ti-eye'; }
+}
+// ══════════════════════════════════════════
+// USER MANAGEMENT (Firebase Auth + Firestore)
+// ══════════════════════════════════════════
+function toggleAddUserForm() {
+  const f = document.getElementById('add-user-form');
+  f.classList.toggle('show');
+  if (f.classList.contains('show')) {
+    document.getElementById('new-user-name').focus();
+    document.getElementById('create-user-status').textContent = '';
+  }
+}
+
+async function createNewUser() {
+  const name  = document.getElementById('new-user-name').value.trim();
+  const email = document.getElementById('new-user-email').value.trim();
+  const pass  = document.getElementById('new-user-pass').value;
+  const dept  = document.getElementById('new-user-dept').value.trim();
+  const role  = document.querySelector('input[name="new-user-role"]:checked').value;
+  const status = document.getElementById('create-user-status');
+
+  if (!name || !email || !pass) {
+    status.textContent = '⚠️ Nama, email, dan password wajib diisi.';
+    status.style.color = 'var(--c1)';
+    return;
+  }
+  if (pass.length < 6) {
+    status.textContent = '⚠️ Password minimal 6 karakter.';
+    status.style.color = 'var(--c1)';
+    return;
+  }
+
+  status.textContent = 'Membuat akun...';
+  status.style.color = 'var(--muted)';
+
+  try {
+    // Buat user baru via sistem custom Firestore (bukan Firebase Auth)
+    // _fbCreateUser sudah handle hash password & simpan ke Firestore
+    const result = await window._fbCreateUser(email, pass, name, role, dept || '-');
+    const uid = result.uid;
+
+    status.textContent = '✅ Akun berhasil dibuat!';
+    status.style.color = 'var(--c4)';
+    showToast('Akun ' + name + ' berhasil dibuat sebagai ' + role, 'success');
+
+    // Reset form
+    document.getElementById('new-user-name').value = '';
+    document.getElementById('new-user-email').value = '';
+    document.getElementById('new-user-pass').value = '';
+    document.getElementById('new-user-dept').value = '';
+
+    // Refresh daftar user — sesi admin TIDAK terputus (custom auth, bukan Firebase Auth)
+    loadUserList();
+  } catch(e) {
+    let msg = 'Gagal membuat akun: ' + e.message;
+    status.textContent = msg;
+    status.style.color = 'var(--c1)';
+  }
+}
+
+async function loadUserList() {
+  const wrap = document.getElementById('user-list-wrap');
+  const btn  = document.getElementById('refresh-users-btn');
+
+  // Pastikan Firebase sudah siap
+  if (!window._fbGetDocs || !window._fbCollection || !window._db) {
+    wrap.innerHTML = '<div style="text-align:center;padding:24px;color:var(--c2);font-size:13px">⏳ Menunggu koneksi Firebase... Klik Refresh setelah beberapa detik.</div>';
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  wrap.innerHTML = '<div style="text-align:center;padding:24px;color:var(--muted);font-size:13px"><div class="spinner" style="margin:0 auto 12px"></div>Memuat data user...</div>';
+  btn.disabled = true;
+
+  try {
+    const snap = await window._fbGetDocs(window._fbCollection(window._db, 'users'));
+    if (snap.empty) {
+      wrap.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-size:13px">Belum ada user terdaftar di Firestore.<br><small>Tambahkan user baru atau pastikan Firestore rules mengizinkan baca.</small></div>';
+      btn.disabled = false;
+      return;
+    }
+
+    const rows = snap.docs.map(d => {
+      const u = d.data();
+      const initials = (u.name||u.email||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+      const roleClass = u.role === 'admin' ? 'role-admin' : 'role-employee';
+      const roleLabel = u.role === 'admin' ? 'Admin' : 'Karyawan';
+      const isSelf = window._currentUser && d.id === window._currentUser.uid;
+      return `<tr>
+        <td>
+          <span class="user-avatar-sm" style="background:${u.role==='admin'?'rgba(255,92,53,0.3)':'rgba(107,203,255,0.2)'}">${initials}</span>
+          ${esc(u.name || '-')} ${isSelf ? '<span style="font-size:10px;color:var(--muted)">(kamu)</span>' : ''}
+        </td>
+        <td style="color:var(--muted)">${esc(u.email || '-')}</td>
+        <td style="color:var(--muted)">${esc(u.dept || '-')}</td>
+        <td><span class="role-badge ${roleClass}">${roleLabel}</span></td>
+        <td>
+          <div style="display:flex;gap:6px">
+            <button class="btn-edit" style="padding:4px 10px;font-size:11px" onclick="sendResetLink('${esc(u.email||'')}')">
+              <i class="ti ti-mail"></i> Reset Pass
+            </button>
+            <button class="btn-edit" style="padding:4px 10px;font-size:11px" onclick="toggleUserRole('${d.id}','${u.role}','${esc(u.name||u.email)}')">
+              <i class="ti ti-arrows-exchange"></i> Ganti Role
+            </button>
+            ${!isSelf ? `<button class="btn-danger" style="padding:4px 10px;font-size:11px" onclick="deleteUserProfile('${d.id}','${esc(u.name||u.email)}')">
+              <i class="ti ti-trash"></i>
+            </button>` : ''}
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+
+    wrap.innerHTML = `<table class="user-table">
+      <thead><tr>
+        <th>Nama</th><th>Email</th><th>Divisi / Jabatan</th><th>Role</th><th>Aksi</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } catch(e) {
+    wrap.innerHTML = `<div style="text-align:center;padding:24px;color:var(--c1);font-size:13px">Gagal memuat: ${e.message}<br><small>Pastikan Firestore Security Rules mengizinkan akses admin.</small></div>`;
+  }
+  btn.disabled = false;
+}
+
+async function sendResetLink(email) {
+  if (!email) { showToast('Email tidak ditemukan.', 'error'); return; }
+  try {
+    await window._fbSendPasswordReset(email);
+    showToast('Reset link dikirim ke ' + email, 'success');
+  } catch(e) { showToast('Gagal kirim reset link.', 'error'); }
+}
+
+async function toggleUserRole(uid, currentRole, name) {
+  const newRole = currentRole === 'admin' ? 'employee' : 'admin';
+  if (!confirm(`Ubah role ${name} dari "${currentRole}" menjadi "${newRole}"?`)) return;
+  try {
+    await window._fbSetDoc(window._fbDoc(window._db, 'users', uid), { role: newRole }, { merge: true });
+    showToast(`Role ${name} diubah ke ${newRole}`, 'success');
+    loadUserList();
+  } catch(e) { showToast('Gagal ubah role: ' + e.message, 'error'); }
+}
+
+async function deleteUserProfile(uid, name) {
+  if (!confirm(`Hapus profil "${name}" dari sistem?\n\nCatatan: Akun Firebase Auth perlu dihapus manual di Firebase Console.`)) return;
+  try {
+    await window._fbDeleteDoc(window._fbDoc(window._db, 'users', uid));
+    showToast(`Profil ${name} dihapus dari Firestore.`, 'success');
+    loadUserList();
+  } catch(e) { showToast('Gagal hapus profil: ' + e.message, 'error'); }
+}
+
+// ══════════════════════════════════════════
+// EXPORT / IMPORT
+// ══════════════════════════════════════════
+function exportData() {
+  const blob = new Blob([JSON.stringify(appData, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href=url; a.download='hrportal-data.json'; a.click();
+  URL.revokeObjectURL(url);
+  showToast('Data diekspor','success');
+}
+function importDataPrompt() {
+  document.getElementById('import-modal').classList.add('show');
+  document.getElementById('import-json-area').value='';
+}
+async function doImport() {
+  try {
+    const parsed = JSON.parse(document.getElementById('import-json-area').value);
+    appData = parsed;
+    document.getElementById('import-modal').classList.remove('show');
+    renderAdmin();
+    renderAll();
+    await saveData();
+    showToast('Data berhasil diimport & disinkronkan','success');
+  } catch(e) { showToast('JSON tidak valid: '+e.message,'error'); }
+}
+
+// ══════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+async function saveAndRefresh() {
+  renderAll();
+  renderAdmin();
+  await saveData();
+}
+function renderAll() {
+  renderHome();
+  renderFAQ();
+  renderForm('cuti');
+  renderChips();
+  renderPkwt();
+  renderOrg();
+  renderCustomNavMenus();
+}
+
+// ══════════════════════════════════════════
+// MENU KUSTOM
+// ══════════════════════════════════════════
+function renderCustomMenuEditor() {
+  if (!appData.customMenus) appData.customMenus = [];
+  const c = document.getElementById('custommenu-editor');
+  if (!appData.customMenus.length) {
+    c.innerHTML = `<div style="text-align:center;padding:32px;color:var(--muted);font-size:13px">
+      <i class="ti ti-link" style="font-size:28px;display:block;margin-bottom:8px;opacity:.4"></i>
+      Belum ada menu kustom. Klik <b>"Tambah Menu"</b> untuk mulai.
+    </div>`;
+    return;
+  }
+  c.innerHTML = appData.customMenus.map((m,i)=>`
+    <div style="display:grid;grid-template-columns:1fr 2fr auto auto;gap:10px;align-items:center;padding:10px 12px;background:var(--dark2);border:1px solid rgba(255,255,255,0.07);border-radius:10px;margin-bottom:8px">
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Nama Menu</div>
+        <input class="inline-edit" style="width:100%" value="${esc(m.label)}" placeholder="Cth: Absensi" oninput="appData.customMenus[${i}].label=this.value">
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">URL / Link Tautan</div>
+        <input class="inline-edit" style="width:100%" value="${esc(m.url)}" placeholder="https://..." oninput="appData.customMenus[${i}].url=this.value">
+      </div>
+      <div style="text-align:center">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Aktif</div>
+        <label style="display:flex;align-items:center;justify-content:center;cursor:pointer;gap:6px">
+          <input type="checkbox" ${m.active!==false?'checked':''} onchange="appData.customMenus[${i}].active=this.checked" style="width:16px;height:16px;cursor:pointer;accent-color:var(--c1)">
+          <span style="font-size:12px;color:${m.active!==false?'#A8F0A0':'var(--muted)'}">${m.active!==false?'Ya':'Tidak'}</span>
+        </label>
+      </div>
+      <div style="text-align:center">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Hapus</div>
+        <button onclick="deleteCustomMenu(${i})" style="background:rgba(255,92,53,0.1);border:1px solid rgba(255,92,53,0.25);border-radius:7px;color:var(--c1);cursor:pointer;padding:6px 10px;font-size:14px;transition:all .15s" onmouseover="this.style.background='rgba(255,92,53,0.2)'" onmouseout="this.style.background='rgba(255,92,53,0.1)'">
+          <i class="ti ti-trash"></i>
+        </button>
+      </div>
+    </div>`).join('');
+}
+
+function addCustomMenu() {
+  if (!appData.customMenus) appData.customMenus = [];
+  appData.customMenus.push({ label:'Menu Baru', url:'https://', active:true });
+  renderCustomMenuEditor();
+}
+
+async function deleteCustomMenu(i) {
+  if (!confirm('Hapus menu ini?')) return;
+  appData.customMenus.splice(i,1);
+  renderCustomMenuEditor();
+  renderCustomNavMenus();
+  await saveData();
+}
+
+async function saveCustomMenu() {
+  // Validasi
+  const invalid = appData.customMenus.filter(m => !m.label.trim() || !m.url.trim() || m.url === 'https://');
+  if (invalid.length) {
+    showToast('Isi nama dan URL semua menu sebelum menyimpan.', 'error');
+    return;
+  }
+  await saveAndRefresh();
+  showToast('Menu berhasil diterapkan ke navbar! ✅', 'success');
+}
+
+function renderCustomNavMenus() {
+  const container = document.getElementById('custom-nav-menus');
+  if (!container) return;
+  const active = (appData.customMenus || []).filter(m => m.active !== false);
+  if (!active.length) { container.innerHTML = ''; return; }
+
+  // Menu pertama tampil langsung di navbar
+  const first = active[0];
+  const rest  = active.slice(1);
+
+  let html = `<button class="nav-link" onclick="window.open('${esc(first.url)}','_blank')" style="display:flex;align-items:center;gap:5px">
+    <i class="ti ti-external-link" style="font-size:11px;opacity:.6"></i>${esc(first.label)}
+  </button>`;
+
+  // Jika ada lebih dari 1, sisanya masuk dropdown "Lainnya"
+  if (rest.length > 0) {
+    const items = rest.map(m => `
+      <a href="${esc(m.url)}" target="_blank" class="custom-dd-item">
+        <i class="ti ti-external-link" style="font-size:11px;opacity:.5;flex-shrink:0"></i>
+        <span>${esc(m.label)}</span>
+      </a>`).join('');
+
+    html += `
+      <div class="custom-dd-wrap" id="custom-dd-wrap">
+        <button class="nav-link custom-dd-trigger" onclick="toggleCustomDd(event)" style="display:flex;align-items:center;gap:5px">
+          Lainnya <i class="ti ti-chevron-down" id="custom-dd-chevron" style="font-size:11px;transition:transform .2s"></i>
+        </button>
+        <div class="custom-dd-menu" id="custom-dd-menu">
+          ${items}
+        </div>
+      </div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+function toggleCustomDd(e) {
+  e.stopPropagation();
+  const menu = document.getElementById('custom-dd-menu');
+  const chevron = document.getElementById('custom-dd-chevron');
+  if (!menu) return;
+  const open = menu.classList.toggle('open');
+  if (chevron) chevron.style.transform = open ? 'rotate(180deg)' : 'rotate(0deg)';
+}
+
+// Tutup dropdown saat klik di luar
+document.addEventListener('click', function(e) {
+  const wrap = document.getElementById('custom-dd-wrap');
+  if (wrap && !wrap.contains(e.target)) {
+    const menu = document.getElementById('custom-dd-menu');
+    const chevron = document.getElementById('custom-dd-chevron');
+    if (menu) menu.classList.remove('open');
+    if (chevron) chevron.style.transform = 'rotate(0deg)';
+  }
+});
+
+// ══════════════════════════════════════════
+// COPY LINK / SHARE MENU
+// ══════════════════════════════════════════
+const SHARE_PAGES = [
+  { page: 'home',   label: 'Beranda',          icon: 'ti-home',          color: 'var(--c1)',   desc: 'Halaman utama portal HR' },
+  { page: 'policy', label: 'Kebijakan',         icon: 'ti-file-text',     color: 'var(--c3)',   desc: 'Peraturan & kebijakan perusahaan' },
+  { page: 'pkwt',   label: 'PKWT / PKWTT',     icon: 'ti-license',       color: '#A8F0A0',     desc: 'Status kontrak kerja karyawan' },
+  { page: 'org',    label: 'Organisasi',        icon: 'ti-sitemap',       color: 'var(--c2)',   desc: 'Struktur organisasi perusahaan' },
+  { page: 'form',   label: 'Form Pengajuan',    icon: 'ti-send',          color: 'var(--c3)',   desc: 'Cuti, lembur, reimbursement' },
+  { page: 'chat',   label: 'HR Assistant',      icon: 'ti-robot',         color: 'var(--c1)',   desc: 'Tanya AI HR 24/7' },
+  { page: 'faq',    label: 'FAQ',               icon: 'ti-help-circle',   color: 'var(--c2)',   desc: 'Pertanyaan yang sering ditanyakan' },
+];
+
+function buildShareLink(page) {
+  const base = window.location.href.split('?')[0].split('#')[0];
+  return base + '?page=' + page;
+}
+
+function renderShareLinks() {
+  const container = document.getElementById('sharelink-list');
+  if (!container) return;
+  container.innerHTML = SHARE_PAGES.map(p => `
+    <div style="display:flex;align-items:center;gap:14px;padding:14px 16px;background:var(--dark2);border:1px solid rgba(255,255,255,0.07);border-radius:12px;transition:border-color .2s" onmouseover="this.style.borderColor='rgba(255,255,255,0.15)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.07)'">
+      <div style="width:40px;height:40px;border-radius:10px;background:rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:center;font-size:18px;color:${p.color};flex-shrink:0">
+        <i class="ti ${p.icon}"></i>
+      </div>
+      <div style="flex:0 0 160px">
+        <div style="font-size:13px;font-weight:600;color:var(--white)">${p.label}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${p.desc}</div>
+      </div>
+      <input class="inline-edit" style="flex:1;font-size:12px;color:var(--muted)" readonly value="${buildShareLink(p.page)}" id="sl-input-${p.page}">
+      <button onclick="copyShareLink('${p.page}')" id="sl-btn-${p.page}" style="background:var(--dark3);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:var(--white);cursor:pointer;padding:7px 14px;font-size:12px;font-weight:600;font-family:var(--font-body);transition:all .15s;white-space:nowrap;display:flex;align-items:center;gap:6px" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='var(--dark3)'">
+        <i class="ti ti-copy"></i> Salin
+      </button>
+      <button onclick="quickAddToMenu('${p.page}','${p.label}')" style="background:rgba(255,92,53,0.1);border:1px solid rgba(255,92,53,0.25);border-radius:8px;color:var(--c1);cursor:pointer;padding:7px 14px;font-size:12px;font-weight:600;font-family:var(--font-body);transition:all .15s;white-space:nowrap;display:flex;align-items:center;gap:6px" onmouseover="this.style.background='rgba(255,92,53,0.2)'" onmouseout="this.style.background='rgba(255,92,53,0.1)'">
+        <i class="ti ti-plus"></i> + Menu
+      </button>
+    </div>
+  `).join('');
+}
+
+function copyShareLink(page) {
+  const input = document.getElementById('sl-input-' + page);
+  const btn   = document.getElementById('sl-btn-' + page);
+  if (!input) return;
+  navigator.clipboard.writeText(input.value).then(() => {
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<i class="ti ti-check"></i> Tersalin!';
+    btn.style.background = 'rgba(168,240,160,0.15)';
+    btn.style.borderColor = 'rgba(168,240,160,0.35)';
+    btn.style.color = '#A8F0A0';
+    setTimeout(() => {
+      btn.innerHTML = orig;
+      btn.style.background = 'var(--dark3)';
+      btn.style.borderColor = 'rgba(255,255,255,0.1)';
+      btn.style.color = 'var(--white)';
+    }, 2000);
+    showToast('Link "' + (SHARE_PAGES.find(p=>p.page===page)||{label:page}).label + '" berhasil disalin! 📋', 'success');
+  }).catch(() => {
+    input.select();
+    document.execCommand('copy');
+    showToast('Link disalin!', 'success');
+  });
+}
+
+async function quickAddToMenu(page, label) {
+  if (!appData.customMenus) appData.customMenus = [];
+  const url = buildShareLink(page);
+  const exists = appData.customMenus.find(m => m.url === url);
+  if (exists) { showToast('Menu "' + label + '" sudah ada di Menu Kustom.', 'error'); return; }
+  appData.customMenus.push({ label: label, url: url, active: true });
+  await saveAndRefresh();
+  showToast('✅ Menu "' + label + '" ditambahkan ke navbar!', 'success');
+}
+
+function generateCustomLink() {
+  const page = document.getElementById('custom-link-page').value;
+  document.getElementById('custom-link-output').value = buildShareLink(page);
+}
+
+function copyCustomLink() {
+  const val = document.getElementById('custom-link-output').value;
+  if (!val || val === '') { showToast('Klik Generate dulu.', 'error'); return; }
+  navigator.clipboard.writeText(val).then(() => {
+    showToast('Link kustom berhasil disalin! 📋', 'success');
+  }).catch(() => {
+    document.getElementById('custom-link-output').select();
+    document.execCommand('copy');
+    showToast('Link disalin!', 'success');
+  });
+}
+
+
+// ══════════════════════════════════════════
+// KELOLA TAB ADMIN
+// ══════════════════════════════════════════
+const ALL_TABS = [
+  { tab:'pengumuman', label:'📢 Pengumuman' },
+  { tab:'ticker',     label:'📡 Ticker' },
+  { tab:'kebijakan',  label:'📋 Kebijakan' },
+  { tab:'faq',        label:'❓ FAQ' },
+  { tab:'karyawan',   label:'👥 Karyawan' },
+  { tab:'organisasi', label:'🏢 Organisasi' },
+  { tab:'hero',       label:'🏠 Beranda' },
+  { tab:'api',        label:'🔑 API Key' },
+  { tab:'users',      label:'👤 Kelola User' },
+  { tab:'custommenu', label:'🔗 Menu Kustom' },
+  { tab:'sharelink',  label:'📎 Copy Link' },
+];
+
+function getHiddenTabs() {
+  try { return JSON.parse(localStorage.getItem('hrportal_hidden_tabs') || '[]'); } catch(e) { return []; }
+}
+
+function applyHiddenTabs() {
+  const hidden = getHiddenTabs();
+  document.querySelectorAll('.admin-tab[data-tab]').forEach(btn => {
+    const t = btn.getAttribute('data-tab');
+    if (t === '__manage__') return;
+    btn.style.display = hidden.includes(t) ? 'none' : '';
+  });
+}
+
+function renderManageTabs() {
+  const hidden = getHiddenTabs();
+  const c = document.getElementById('manage-tabs-list');
+  if (!c) return;
+  c.innerHTML = ALL_TABS.map(t => `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--dark2);border:1px solid rgba(255,255,255,0.07);border-radius:10px">
+      <span style="font-size:13px;font-weight:500">${t.label}</span>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--muted)">
+        <span>${hidden.includes(t.tab) ? 'Tersembunyi' : 'Tampil'}</span>
+        <input type="checkbox" id="mgtab-${t.tab}" ${hidden.includes(t.tab) ? '' : 'checked'} style="width:16px;height:16px;accent-color:var(--c1);cursor:pointer" onchange="updateTabLabel('${t.tab}',this)">
+      </label>
+    </div>
+  `).join('');
+}
+
+function updateTabLabel(tab, checkbox) {
+  const label = checkbox.previousElementSibling;
+  label.textContent = checkbox.checked ? 'Tampil' : 'Tersembunyi';
+}
+
+function saveHiddenTabs() {
+  const hidden = ALL_TABS.filter(t => {
+    const cb = document.getElementById('mgtab-' + t.tab);
+    return cb && !cb.checked;
+  }).map(t => t.tab);
+  localStorage.setItem('hrportal_hidden_tabs', JSON.stringify(hidden));
+  applyHiddenTabs();
+  showToast('Pengaturan tab tersimpan!', 'success');
+}
+
+function resetHiddenTabs() {
+  localStorage.removeItem('hrportal_hidden_tabs');
+  applyHiddenTabs();
+  renderManageTabs();
+  showToast('Semua tab ditampilkan kembali.', 'success');
+}
+
+// Patch switchAdmin untuk handle __manage__
+const _origSwitchAdmin2 = switchAdmin;
+switchAdmin = function(tab) {
+  if (tab === '__manage__') {
+    document.querySelectorAll('.admin-tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.admin-section').forEach(s=>s.classList.remove('active'));
+    const btn = document.querySelector('.admin-tab[data-tab="__manage__"]');
+    if (btn) btn.classList.add('active');
+    const sec = document.getElementById('as-__manage__');
+    if (sec) sec.classList.add('active');
+    renderManageTabs();
+    return;
+  }
+  _origSwitchAdmin2(tab);
+};
+
+// Terapkan saat load
+applyHiddenTabs();
+
+// ══════════════════════════════════════════
+// REALTIME SYNC — ditangani oleh onSnapshot di firebase module script di atas.
+// Listener duplikat dihapus untuk mencegah konflik data.
+// ══════════════════════════════════════════
+
+// ══════════════════════════════════════════
+// INIT + URL PARAM HANDLER
+// ══════════════════════════════════════════
+(function handleUrlParam() {
+  const params = new URLSearchParams(window.location.search);
+  const page = params.get('page');
+  if (page) {
+    const publicPages = ['home','policy','pkwt','org','chat','faq'];
+    const loginPages  = ['form'];
+    if (publicPages.includes(page)) {
+      setTimeout(() => { if(typeof showPage==='function') showPage(page); }, 400);
+    } else if (loginPages.includes(page)) {
+      setTimeout(() => { if(typeof requireLogin==='function') requireLogin(page); }, 400);
+    }
+  }
+})();
+
+renderAll();
+</script>
+</body>
+</html>
