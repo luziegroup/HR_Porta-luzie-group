@@ -31,21 +31,6 @@
   const db   = getFirestore(app);
   const DOC_REF = doc(db, "hrportal", "data");
 
-  // ── CATATAN FIRESTORE RULES ──
-  // Pastikan Firestore Security Rules mengizinkan public read untuk collection hrportal:
-  // rules_version = '2';
-  // service cloud.firestore {
-  //   match /databases/{database}/documents {
-  //     match /hrportal/{document} {
-  //       allow read: if true;           // siapa saja bisa baca konten portal
-  //       allow write: if false;         // write hanya via Admin SDK / trusted client
-  //     }
-  //     match /users/{userId} {
-  //       allow read, write: if true;    // untuk auth custom
-  //     }
-  //   }
-  // }
-
   // ── Expose ke window ──
   window._firebaseReady = false;
   window._db     = db;
@@ -106,8 +91,8 @@
 
   window._fbUpdateUserPassword = async (uid, newPassword) => {
     const hashed = await window._hashPassword(newPassword);
-    // Gunakan setDoc dengan merge:true — tidak perlu import dinamis
-    await setDoc(doc(db, "users", uid), { password: hashed }, { merge: true });
+    const { updateDoc } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+    await updateDoc(doc(db, "users", uid), { password: hashed });
   };
 
   // ── Cek sesi tersimpan saat load ──
@@ -140,93 +125,51 @@
   }
 
   // ── Real-time content listener ──
-  // Queue untuk data yang datang sebelum main script siap
-  window._pendingRemoteData = null;
-
-  // Gunakan callback window._onRemoteData agar bisa update appData lokal di non-module script
   onSnapshot(DOC_REF, (snap) => {
     if (snap.exists()) {
-      const snapData = snap.data();
-      const remote = snapData.payload;
-      const remoteTs = snapData.updatedAt || '';
+      const remote = snap.data().payload;
       if (remote) {
         const apiKey = localStorage.getItem('hrportal_apikey') || '';
+        window.appData = JSON.parse(remote);
         localStorage.setItem('hrportal_data', remote);
-        localStorage.setItem('hrportal_ts', remoteTs);
         if (apiKey) localStorage.setItem('hrportal_apikey', apiKey);
-        // Update via callback — agar appData lokal di main script ikut ter-update
-        if (typeof window._onRemoteData === 'function') {
-          window._onRemoteData(remote);
-        } else {
-          // Main script belum siap — simpan ke queue, akan diproses saat siap
-          window._pendingRemoteData = remote;
-        }
+        if (typeof renderAll === 'function') renderAll();
+        if (typeof renderAdmin === 'function' && window._isAdminPageOpen) renderAdmin();
         showFbStatus('synced');
       }
     } else {
-      // Dokumen belum ada di Firestore — push data lokal, tapi tunggu main script siap
-      const tryPush = () => {
-        if (window.appData || localStorage.getItem('hrportal_data')) {
-          window._fbPushToCloud && window._fbPushToCloud();
-        } else {
-          setTimeout(tryPush, 300); // coba lagi 300ms kemudian
-        }
-      };
-      setTimeout(tryPush, 500);
+      window._fbPushToCloud();
     }
     window._firebaseReady = true;
   }, (err) => {
-    console.warn('[HR Portal] Firebase error:', err.message, err.code);
-    showFbStatus('error', err.message);
+    console.warn('Firebase error:', err.message);
+    showFbStatus('error');
     window._firebaseReady = false;
   });
 
   // ── Push konten ke Firestore ──
   window._fbPushToCloud = async function() {
     try {
-      // Ambil data: prioritas window.appData, fallback ke localStorage
-      let dataToSave = window.appData;
-      if (!dataToSave) {
-        const local = localStorage.getItem('hrportal_data');
-        if (!local) { console.warn('[HR Portal] Tidak ada data untuk di-push'); return; }
-        dataToSave = JSON.parse(local);
-      }
-      // Buat salinan bersih — hapus credentials agar tidak tersimpan di cloud
-      const safeData = JSON.parse(JSON.stringify(dataToSave));
-      delete safeData.credentials;
-      const payload = JSON.stringify(safeData);
-      const ts = new Date().toISOString();
-      await setDoc(DOC_REF, { payload, updatedAt: ts });
-      localStorage.setItem('hrportal_ts', ts);
+      await setDoc(DOC_REF, { payload: JSON.stringify(window.appData), updatedAt: new Date().toISOString() });
       showFbStatus('synced');
     } catch(e) {
       console.error('Firebase save error:', e);
-      showFbStatus('error', e.message);
-      throw e;
+      showFbStatus('error');
     }
   };
 
-  function showFbStatus(state, errMsg) {
-    const el  = document.getElementById('fb-status');
-    const dot = document.getElementById('sync-dot');
+  function showFbStatus(state) {
+    const el = document.getElementById('fb-status');
+    if (!el) return;
     if (state === 'synced') {
-      if (el) { el.innerHTML = '<i class="ti ti-cloud-check"></i> Cloud Sync Aktif'; el.style.color = '#A8F0A0'; }
-      if (dot) dot.style.display = 'none';
+      el.innerHTML = '<i class="ti ti-cloud-check"></i> Cloud Sync Aktif';
+      el.style.color = '#A8F0A0';
     } else if (state === 'saving') {
-      if (el) { el.innerHTML = '<i class="ti ti-cloud-upload"></i> Menyimpan...'; el.style.color = '#FFD93D'; }
-      if (dot) { dot.style.display = 'inline-block'; dot.style.background = '#FFD93D'; dot.title = 'Menyimpan ke cloud...'; }
+      el.innerHTML = '<i class="ti ti-cloud-upload"></i> Menyimpan...';
+      el.style.color = '#FFD93D';
     } else {
-      const hint = errMsg || 'Offline / Gagal konek ke cloud';
-      if (el) { el.innerHTML = '<i class="ti ti-cloud-off"></i> Offline / Error'; el.style.color = '#FF5C35'; }
-      if (dot) { dot.style.display = 'inline-block'; dot.style.background = '#FF5C35'; dot.title = hint; }
-      // Tampilkan toast error agar user tahu (sekali saja, jangan spam)
-      if (!window._fbErrShown) {
-        window._fbErrShown = true;
-        // Delay agar toast DOM sudah siap
-        setTimeout(() => {
-          if (typeof showToast === 'function') showToast('⚠️ Gagal konek ke cloud: ' + hint, 'error');
-        }, 1500);
-      }
+      el.innerHTML = '<i class="ti ti-cloud-off"></i> Offline / Error';
+      el.style.color = '#FF5C35';
     }
   }
   window._showFbStatus = showFbStatus;
@@ -253,26 +196,16 @@ nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; display: flex; a
 .nav-links { display: flex; gap: 2px; }
 .nav-link { padding: 6px 12px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer; transition: all .2s; border: none; background: none; font-family: var(--font-body); }
 .nav-link:hover, .nav-link.active { color: var(--white); background: var(--dark3); }
-
-/* CUSTOM MENU DROPDOWN */
-.custom-dd-wrap { position: relative; }
-.custom-dd-menu {
-  display: none; position: absolute; top: calc(100% + 8px); left: 50%;
-  transform: translateX(-50%);
-  background: var(--dark2); border: 1px solid rgba(255,255,255,0.1);
-  border-radius: var(--radius-sm); padding: 6px; min-width: 170px;
-  box-shadow: 0 12px 32px rgba(0,0,0,0.4); z-index: 200;
-  animation: ddFadeIn .15s ease;
-}
-.custom-dd-menu.open { display: block; }
-@keyframes ddFadeIn { from{opacity:0;transform:translateX(-50%) translateY(-6px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
-.custom-dd-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 9px 12px; border-radius: 7px; font-size: 13px; font-weight: 500;
-  color: var(--muted); text-decoration: none; transition: all .15s;
-  white-space: nowrap;
-}
-.custom-dd-item:hover { background: var(--dark3); color: var(--white); }
+.custom-nav-dropdown { position: relative; display: inline-block; }
+.custom-nav-dropdown-btn { padding: 6px 12px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer; transition: all .2s; border: none; background: none; font-family: var(--font-body); display:flex;align-items:center;gap:5px; }
+.custom-nav-dropdown-btn:hover { color: var(--white); background: var(--dark3); }
+.custom-nav-dropdown-btn i { font-size:11px;transition:transform .2s; }
+.custom-nav-dropdown-btn.open i.ti-chevron-down { transform:rotate(180deg); }
+.custom-nav-dropdown-menu { position:absolute;top:calc(100% + 6px);left:0;min-width:180px;background:var(--dark2);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:6px;z-index:999;box-shadow:0 8px 32px rgba(0,0,0,0.4);display:none;flex-direction:column;gap:2px; }
+.custom-nav-dropdown-menu.show { display:flex; }
+.custom-nav-dropdown-menu a { display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:13px;font-weight:500;color:var(--muted);text-decoration:none;transition:all .15s;cursor:pointer; }
+.custom-nav-dropdown-menu a:hover { color:var(--white);background:var(--dark3); }
+.custom-nav-dropdown-menu a i { font-size:12px;opacity:.7; }
 .nav-right { display: flex; align-items: center; gap: 8px; }
 .btn-login { padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; border: 1px solid rgba(255,255,255,0.15); background: transparent; color: var(--white); cursor: pointer; transition: all .2s; font-family: var(--font-body); }
 .btn-login:hover { background: var(--dark3); }
@@ -600,8 +533,6 @@ footer a { color: var(--muted); text-decoration: none; } footer a:hover { color:
     <div id="custom-nav-menus"></div>
   </div>
   <div class="nav-right">
-    <!-- Indikator sync kecil -->
-    <span id="sync-dot" title="Offline / Gagal konek ke cloud" style="display:none;width:8px;height:8px;border-radius:50%;background:#FF5C35;margin-right:4px;flex-shrink:0;animation:blink 1.5s infinite"></span>
     <button class="btn-login" onclick="openLogin()" id="btn-login-nav">Masuk</button>
     <div id="user-badge" style="display:none;align-items:center;gap:8px;font-size:13px;color:var(--white)">
       <div id="user-avatar" style="width:28px;height:28px;border-radius:8px;background:var(--c1);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px">AK</div>
@@ -861,16 +792,38 @@ footer a { color: var(--muted); text-decoration: none; } footer a:hover { color:
     <div class="admin-section" id="as-api">
       <div class="api-key-box">
         <h4><i class="ti ti-alert-triangle"></i> Keamanan API Key</h4>
-        <p>API key disimpan hanya di <strong>localStorage browser ini</strong>, tidak dikirim ke server manapun selain langsung ke api.anthropic.com. Gunakan restricted API key dengan budget limit untuk keamanan optimal.</p>
+        <p>API key disimpan hanya di <strong>localStorage browser ini</strong>. HARA akan pakai <b>Anthropic</b> dulu — jika tidak diset atau error, otomatis fallback ke <b>Groq</b>.</p>
       </div>
-      <div class="editor-block">
-        <div class="field-row"><div class="field-label">Anthropic API Key</div>
+
+      <!-- Anthropic -->
+      <div class="editor-block" style="margin-bottom:12px">
+        <div class="field-row">
+          <div class="field-label" style="display:flex;align-items:center;gap:8px">
+            <span style="background:rgba(255,92,53,0.15);border:1px solid rgba(255,92,53,0.3);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--c1);font-weight:600">UTAMA</span>
+            Anthropic API Key
+          </div>
           <div class="api-input-row">
             <input type="password" id="api-key-input" placeholder="sk-ant-...">
             <button class="btn-edit" onclick="toggleApiKeyVisibility()"><i class="ti ti-eye" id="api-eye-icon"></i></button>
             <button class="btn-save" onclick="saveApiKey()"><i class="ti ti-check"></i> Simpan</button>
           </div>
-          <div class="api-status" id="api-status"><span class="dot-status dot-no"></span><span>Belum diset</span></div>
+          <div class="api-status" id="api-status"><span class="dot-status dot-no"></span><span>Belum diset — akan pakai Groq sebagai backup</span></div>
+        </div>
+      </div>
+
+      <!-- Groq -->
+      <div class="editor-block">
+        <div class="field-row">
+          <div class="field-label" style="display:flex;align-items:center;gap:8px">
+            <span style="background:rgba(107,203,255,0.15);border:1px solid rgba(107,203,255,0.3);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--c3);font-weight:600">BACKUP</span>
+            Groq API Key <span style="font-size:11px;color:var(--muted);font-weight:400">(Gratis — llama-3.3-70b)</span>
+          </div>
+          <div class="api-input-row">
+            <input type="password" id="groq-key-input" placeholder="gsk_...">
+            <button class="btn-edit" onclick="toggleGroqKeyVisibility()"><i class="ti ti-eye" id="groq-eye-icon"></i></button>
+            <button class="btn-save" onclick="saveGroqKey()"><i class="ti ti-check"></i> Simpan</button>
+          </div>
+          <div class="api-status" id="groq-status"><span class="dot-status dot-no"></span><span>Belum diset</span></div>
         </div>
       </div>
     </div>
@@ -1144,23 +1097,15 @@ function loadData() {
   return JSON.parse(JSON.stringify(DEFAULT_DATA));
 }
 
-async function saveData() {
-  // Sync window.appData dari appData lokal agar _fbPushToCloud baca data terbaru
-  window.appData = appData;
+function saveData() {
   // 1. Simpan lokal dulu (cepat, offline-safe)
   localStorage.setItem('hrportal_data', JSON.stringify(appData));
   // 2. Push ke Firebase cloud jika tersedia
   if (window._fbPushToCloud) {
     if (window._showFbStatus) window._showFbStatus('saving');
-    try {
-      await window._fbPushToCloud();
-      showToast('Perubahan tersimpan & disinkronkan ☁️', 'success');
-    } catch(e) {
-      showToast('⚠️ Gagal sync ke cloud! Cek koneksi.', 'error');
-    }
-  } else {
-    showToast('Tersimpan (offline)', 'success');
+    window._fbPushToCloud();
   }
+  showToast('Perubahan tersimpan & disinkronkan', 'success');
 }
 function getApiKey() { return localStorage.getItem('hrportal_apikey') || ''; }
 function saveApiKeyStore(k) { localStorage.setItem('hrportal_apikey', k); }
@@ -1170,26 +1115,6 @@ let isLoggedIn = false;
 let isAdmin = false;
 let pendingPage = null;
 let activePolicyCat = 0;
-
-// ── Callback dari Firebase onSnapshot (module script) ──
-// Ini jembatan antara module scope (Firebase) dan main script scope (appData lokal)
-window._onRemoteData = function(rawJson) {
-  try {
-    const parsed = JSON.parse(rawJson);
-    // Update appData lokal (yang dipakai semua render functions)
-    appData = parsed;
-    renderAll();
-    if (window._isAdminPageOpen && typeof renderAdmin === 'function') renderAdmin();
-  } catch(e) {
-    console.warn('[HR Portal] Gagal parse data dari Firebase:', e);
-  }
-};
-
-// Proses data yang datang sebelum callback ini terdaftar (race condition fix)
-if (window._pendingRemoteData) {
-  window._onRemoteData(window._pendingRemoteData);
-  window._pendingRemoteData = null;
-}
 
 // ── Tampilkan loading overlay sampai Firebase Auth siap ──
 window.addEventListener('DOMContentLoaded', () => {
@@ -1318,7 +1243,8 @@ function onAuthReady() {
     showPage(pendingPage);
   }
   pendingPage = null;
-  // Realtime sync sudah aktif via onSnapshot di firebase module — tidak perlu startRealtimeSync()
+  // Mulai realtime sync setelah login
+  if (!window._realtimeSyncStarted) { window._realtimeSyncStarted = true; setTimeout(startRealtimeSync, 500); }
 }
 
 // Dipanggil saat user logout (dari Firebase)
@@ -1544,10 +1470,55 @@ function showTyping() {
 }
 function removeTyping() { const e=document.getElementById('typing-ind'); if(e) e.remove(); }
 
+function getGroqKey() { return localStorage.getItem('hrportal_groqkey') || ''; }
+function saveGroqKeyStore(k) { localStorage.setItem('hrportal_groqkey', k); }
+
+function saveGroqKey() {
+  const k = document.getElementById('groq-key-input').value.trim();
+  if (!k) { showToast('Masukkan Groq API key dulu.','error'); return; }
+  saveGroqKeyStore(k);
+  updateGroqStatus();
+  showToast('Groq API key tersimpan!','success');
+}
+function toggleGroqKeyVisibility() {
+  const inp = document.getElementById('groq-key-input');
+  const ico = document.getElementById('groq-eye-icon');
+  if (inp.type==='password') { inp.type='text'; ico.className='ti ti-eye-off'; }
+  else { inp.type='password'; ico.className='ti ti-eye'; }
+}
+function updateGroqStatus() {
+  const el = document.getElementById('groq-status'); if (!el) return;
+  const k = getGroqKey();
+  if (k) { el.innerHTML='<span class="dot-status dot-ok"></span><span>Groq siap digunakan ✓</span>'; document.getElementById('groq-key-input').value=k; }
+  else { el.innerHTML='<span class="dot-status dot-no"></span><span>Belum diset</span>'; }
+}
+
+async function askGroq(q, policyContext, sysPrompt) {
+  const groqKey = getGroqKey();
+  if (!groqKey) throw new Error('no-groq-key');
+  const prompt = sysPrompt || ('Kamu adalah HARA, HR Assistant resmi Luzie Group. Jawab dalam Bahasa Indonesia.\n\n' + policyContext);
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + groqKey },
+    body: JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      max_tokens: 800,
+      messages: [
+        { role: "system", content: prompt },
+        { role: "user", content: q }
+      ]
+    })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.choices?.[0]?.message?.content || "Maaf, tidak ada jawaban.";
+}
+
 async function chatSend() {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    addChatMsg('bot','⚠️ API key belum diset. Admin perlu mengisi API key di menu <b>Admin → API Key</b>.');
+  const apiKey  = getApiKey();
+  const groqKey = getGroqKey();
+  if (!apiKey && !groqKey) {
+    addChatMsg('bot','⚠️ API key belum diset. Admin perlu mengisi Anthropic atau Groq API key di menu <b>Admin → API Key</b>.');
     return;
   }
   const inp = document.getElementById('chat-inp');
@@ -1556,25 +1527,39 @@ async function chatSend() {
   document.getElementById('chat-send-btn').disabled=true;
   addChatMsg('user', q);
   showTyping();
-  const policyContext = appData.policies.map(p=>p.items.map(i=>`[${p.cat}] ${i.title}:\n- ${i.points.join('\n- ')}\nSanksi: ${i.penalty||'-'}`).join('\n')).join('\n\n');
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages",{
-      method:"POST",
-      headers:{"Content-Type":"application/json","x-api-key": apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-      body: JSON.stringify({
-        model:"claude-sonnet-4-20250514", max_tokens:800,
-        system:`Kamu adalah HARA, HR Assistant resmi Luzie Group. Jawab pertanyaan karyawan tentang peraturan perusahaan dengan ramah, jelas, dan ringkas dalam Bahasa Indonesia. Gunakan data berikut:\n\n${policyContext}\n\nJika tidak ada di data, sarankan hubungi HRD langsung. Maks. 3 paragraf pendek.`,
-        messages:[{role:"user",content:q}]
-      })
-    });
-    const data = await res.json();
-    removeTyping();
-    if (data.error) { addChatMsg('bot',`⚠️ Error: ${data.error.message}`); }
-    else {
-      const ans = data.content?.[0]?.text || "Maaf, terjadi kesalahan. Silakan coba lagi.";
-      addChatMsg('bot', ans.replace(/\n/g,'<br>'));
-    }
-  } catch(e) { removeTyping(); addChatMsg('bot','Maaf, terjadi gangguan koneksi. Silakan coba lagi.'); }
+  const nl = '\n';
+  const policyContext = appData.policies.map(p=>p.items.map(i=>'['+p.cat+'] '+i.title+':'+nl+'- '+i.points.join(nl+'- ')+nl+'Sanksi: '+(i.penalty||'-')).join(nl)).join(nl+nl);
+  const sysPrompt = 'Kamu adalah HARA, HR Assistant resmi Luzie Group. Jawab pertanyaan karyawan tentang peraturan perusahaan dengan ramah, jelas, dan ringkas dalam Bahasa Indonesia. Gunakan data berikut:'+nl+nl+policyContext+nl+nl+'Jika tidak ada di data, sarankan hubungi HRD langsung. Maks. 3 paragraf pendek.';
+
+  let ans = null;
+
+  // Coba Anthropic dulu
+  if (apiKey) {
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",
+        headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+        body: JSON.stringify({
+          model:"claude-haiku-4-5-20251001", max_tokens:800,
+          system: sysPrompt,
+          messages:[{role:"user",content:q}]
+        })
+      });
+      const data = await res.json();
+      if (!data.error) ans = data.content?.[0]?.text;
+    } catch(e) { console.warn('Anthropic error, fallback ke Groq:', e); }
+  }
+
+  // Fallback ke Groq kalau Anthropic gagal/kosong
+  if (!ans && groqKey) {
+    try {
+      ans = await askGroq(q, policyContext, sysPrompt);
+    } catch(e) { console.warn('Groq error:', e); }
+  }
+
+  removeTyping();
+  if (ans) addChatMsg('bot', ans.replace(/\n/g,'<br>'));
+  else addChatMsg('bot','\u26a0\ufe0f Maaf, kedua layanan AI sedang tidak tersedia. Silakan coba lagi.');
   document.getElementById('chat-send-btn').disabled=false;
 }
 
@@ -1801,17 +1786,19 @@ function saveHero() {
 function renderApiEditor() {
   const key = getApiKey();
   const inp = document.getElementById('api-key-input');
-  inp.value = key;
+  if (inp) inp.value = key;
   updateApiStatus(key);
+  updateGroqStatus();
 }
 function updateApiStatus(key) {
   const el = document.getElementById('api-status');
+  if (!el) return;
   if (key && key.startsWith('sk-ant-')) {
-    el.innerHTML = '<span class="dot-status dot-ok"></span><span style="color:var(--c4)">API Key tersimpan</span>';
+    el.innerHTML = '<span class="dot-status dot-ok"></span><span style="color:var(--c4)">Anthropic API Key tersimpan ✓</span>';
   } else if (key) {
     el.innerHTML = '<span class="dot-status dot-wait"></span><span style="color:var(--c2)">Format tidak dikenali (harus diawali sk-ant-)</span>';
   } else {
-    el.innerHTML = '<span class="dot-status dot-no"></span><span>Belum diset — HARA tidak dapat menjawab</span>';
+    el.innerHTML = '<span class="dot-status dot-no"></span><span>Belum diset — akan pakai Groq sebagai backup</span>';
   }
 }
 function saveApiKey() {
@@ -1861,14 +1848,23 @@ async function createNewUser() {
   status.style.color = 'var(--muted)';
 
   try {
-    // Buat user baru via sistem custom Firestore (bukan Firebase Auth)
-    // _fbCreateUser sudah handle hash password & simpan ke Firestore
-    const result = await window._fbCreateUser(email, pass, name, role, dept || '-');
-    const uid = result.uid;
+    // Simpan session admin saat ini
+    const adminEmail = window._currentUser?.email;
+    const adminPass  = document.getElementById('_admin-pass-cache') ? document.getElementById('_admin-pass-cache').value : '';
+
+    // Buat user baru via Firebase Auth
+    const cred = await window._fbCreateUser(email, pass);
+    const uid  = cred.user.uid;
+
+    // Simpan profil ke Firestore users/{uid}
+    await window._fbSetDoc(
+      window._fbDoc(window._db, 'users', uid),
+      { name, email, dept: dept || '-', role, createdAt: new Date().toISOString() }
+    );
 
     status.textContent = '✅ Akun berhasil dibuat!';
     status.style.color = 'var(--c4)';
-    showToast('Akun ' + name + ' berhasil dibuat sebagai ' + role, 'success');
+    showToast(`Akun ${name} berhasil dibuat sebagai ${role}`, 'success');
 
     // Reset form
     document.getElementById('new-user-name').value = '';
@@ -1876,10 +1872,22 @@ async function createNewUser() {
     document.getElementById('new-user-pass').value = '';
     document.getElementById('new-user-dept').value = '';
 
-    // Refresh daftar user — sesi admin TIDAK terputus (custom auth, bukan Firebase Auth)
+    // Re-login admin (karena createUser otomatis switch session)
+    // Kita perlu admin login ulang — tampilkan prompt
+    showToast('⚠️ Sesi admin berubah. Silakan login ulang sebagai admin.', 'error');
+    setTimeout(() => {
+      window._fbSignOut().then(() => {
+        pendingPage = '__admin__admin';
+        openLogin();
+      });
+    }, 2000);
+
+    // Refresh daftar user
     loadUserList();
   } catch(e) {
     let msg = 'Gagal membuat akun: ' + e.message;
+    if (e.code === 'auth/email-already-in-use') msg = '⚠️ Email sudah terdaftar.';
+    if (e.code === 'auth/invalid-email') msg = '⚠️ Format email tidak valid.';
     status.textContent = msg;
     status.style.color = 'var(--c1)';
   }
@@ -1888,14 +1896,6 @@ async function createNewUser() {
 async function loadUserList() {
   const wrap = document.getElementById('user-list-wrap');
   const btn  = document.getElementById('refresh-users-btn');
-
-  // Pastikan Firebase sudah siap
-  if (!window._fbGetDocs || !window._fbCollection || !window._db) {
-    wrap.innerHTML = '<div style="text-align:center;padding:24px;color:var(--c2);font-size:13px">⏳ Menunggu koneksi Firebase... Klik Refresh setelah beberapa detik.</div>';
-    if (btn) btn.disabled = false;
-    return;
-  }
-
   wrap.innerHTML = '<div style="text-align:center;padding:24px;color:var(--muted);font-size:13px"><div class="spinner" style="margin:0 auto 12px"></div>Memuat data user...</div>';
   btn.disabled = true;
 
@@ -1991,15 +1991,15 @@ function importDataPrompt() {
   document.getElementById('import-modal').classList.add('show');
   document.getElementById('import-json-area').value='';
 }
-async function doImport() {
+function doImport() {
   try {
     const parsed = JSON.parse(document.getElementById('import-json-area').value);
     appData = parsed;
+    localStorage.setItem('hrportal_data', JSON.stringify(appData));
     document.getElementById('import-modal').classList.remove('show');
     renderAdmin();
     renderAll();
-    await saveData();
-    showToast('Data berhasil diimport & disinkronkan','success');
+    showToast('Data berhasil diimport','success');
   } catch(e) { showToast('JSON tidak valid: '+e.message,'error'); }
 }
 
@@ -2007,10 +2007,10 @@ async function doImport() {
 // HELPERS
 // ══════════════════════════════════════════
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-async function saveAndRefresh() {
+function saveAndRefresh() {
+  saveData();
   renderAll();
   renderAdmin();
-  await saveData();
 }
 function renderAll() {
   renderHome();
@@ -2067,79 +2067,76 @@ function addCustomMenu() {
   renderCustomMenuEditor();
 }
 
-async function deleteCustomMenu(i) {
+function deleteCustomMenu(i) {
   if (!confirm('Hapus menu ini?')) return;
   appData.customMenus.splice(i,1);
   renderCustomMenuEditor();
   renderCustomNavMenus();
-  await saveData();
 }
 
-async function saveCustomMenu() {
+function saveCustomMenu() {
   // Validasi
   const invalid = appData.customMenus.filter(m => !m.label.trim() || !m.url.trim() || m.url === 'https://');
   if (invalid.length) {
     showToast('Isi nama dan URL semua menu sebelum menyimpan.', 'error');
     return;
   }
-  await saveAndRefresh();
+  saveAndRefresh();
   showToast('Menu berhasil diterapkan ke navbar! ✅', 'success');
 }
 
 function renderCustomNavMenus() {
   const container = document.getElementById('custom-nav-menus');
   if (!container) return;
-  const active = (appData.customMenus || []).filter(m => m.active !== false);
-  if (!active.length) { container.innerHTML = ''; return; }
+  const menus = (appData.customMenus || []).filter(m => m.active !== false);
+  if (!menus.length) { container.innerHTML = ''; return; }
 
-  // Menu pertama tampil langsung di navbar
-  const first = active[0];
-  const rest  = active.slice(1);
+  const MAX_DIRECT = 1; // tampil langsung max 1, sisanya masuk dropdown "Lainnya"
+  const direct  = menus.slice(0, MAX_DIRECT);
+  const overflow = menus.slice(MAX_DIRECT);
 
-  let html = `<button class="nav-link" onclick="window.open('${esc(first.url)}','_blank')" style="display:flex;align-items:center;gap:5px">
-    <i class="ti ti-external-link" style="font-size:11px;opacity:.6"></i>${esc(first.label)}
-  </button>`;
+  let html = direct.map(m =>
+    `<a class="nav-link" href="${esc(m.url)}" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:5px;text-decoration:none">
+      <i class="ti ti-external-link" style="font-size:11px;opacity:.6"></i>${esc(m.label)}
+    </a>`
+  ).join('');
 
-  // Jika ada lebih dari 1, sisanya masuk dropdown "Lainnya"
-  if (rest.length > 0) {
-    const items = rest.map(m => `
-      <a href="${esc(m.url)}" target="_blank" class="custom-dd-item">
-        <i class="ti ti-external-link" style="font-size:11px;opacity:.5;flex-shrink:0"></i>
-        <span>${esc(m.label)}</span>
-      </a>`).join('');
-
-    html += `
-      <div class="custom-dd-wrap" id="custom-dd-wrap">
-        <button class="nav-link custom-dd-trigger" onclick="toggleCustomDd(event)" style="display:flex;align-items:center;gap:5px">
-          Lainnya <i class="ti ti-chevron-down" id="custom-dd-chevron" style="font-size:11px;transition:transform .2s"></i>
-        </button>
-        <div class="custom-dd-menu" id="custom-dd-menu">
-          ${items}
-        </div>
-      </div>`;
+  if (overflow.length) {
+    html += `<div class="custom-nav-dropdown" id="custom-nav-dd">
+      <button class="custom-nav-dropdown-btn" id="custom-nav-dd-btn" onclick="toggleCustomNavDD(event)">
+        <i class="ti ti-layout-grid" style="font-size:13px"></i> Lainnya
+        <i class="ti ti-chevron-down"></i>
+      </button>
+      <div class="custom-nav-dropdown-menu" id="custom-nav-dd-menu">
+        ${overflow.map(m=>`<a href="${esc(m.url)}" target="_blank" rel="noopener">
+          <i class="ti ti-external-link"></i>${esc(m.label)}
+        </a>`).join('')}
+      </div>
+    </div>`;
   }
 
   container.innerHTML = html;
 }
 
-function toggleCustomDd(e) {
+function toggleCustomNavDD(e) {
   e.stopPropagation();
-  const menu = document.getElementById('custom-dd-menu');
-  const chevron = document.getElementById('custom-dd-chevron');
-  if (!menu) return;
-  const open = menu.classList.toggle('open');
-  if (chevron) chevron.style.transform = open ? 'rotate(180deg)' : 'rotate(0deg)';
+  const btn  = document.getElementById('custom-nav-dd-btn');
+  const menu = document.getElementById('custom-nav-dd-menu');
+  if (!btn || !menu) return;
+  const isOpen = menu.classList.contains('show');
+  // Tutup semua dropdown dulu
+  document.querySelectorAll('.custom-nav-dropdown-menu.show').forEach(m => m.classList.remove('show'));
+  document.querySelectorAll('.custom-nav-dropdown-btn.open').forEach(b => b.classList.remove('open'));
+  if (!isOpen) {
+    menu.classList.add('show');
+    btn.classList.add('open');
+  }
 }
 
-// Tutup dropdown saat klik di luar
-document.addEventListener('click', function(e) {
-  const wrap = document.getElementById('custom-dd-wrap');
-  if (wrap && !wrap.contains(e.target)) {
-    const menu = document.getElementById('custom-dd-menu');
-    const chevron = document.getElementById('custom-dd-chevron');
-    if (menu) menu.classList.remove('open');
-    if (chevron) chevron.style.transform = 'rotate(0deg)';
-  }
+// Tutup dropdown kalau klik di luar
+document.addEventListener('click', () => {
+  document.querySelectorAll('.custom-nav-dropdown-menu.show').forEach(m => m.classList.remove('show'));
+  document.querySelectorAll('.custom-nav-dropdown-btn.open').forEach(b => b.classList.remove('open'));
 });
 
 // ══════════════════════════════════════════
@@ -2207,13 +2204,13 @@ function copyShareLink(page) {
   });
 }
 
-async function quickAddToMenu(page, label) {
+function quickAddToMenu(page, label) {
   if (!appData.customMenus) appData.customMenus = [];
   const url = buildShareLink(page);
   const exists = appData.customMenus.find(m => m.url === url);
   if (exists) { showToast('Menu "' + label + '" sudah ada di Menu Kustom.', 'error'); return; }
   appData.customMenus.push({ label: label, url: url, active: true });
-  await saveAndRefresh();
+  saveAndRefresh();
   showToast('✅ Menu "' + label + '" ditambahkan ke navbar!', 'success');
 }
 
@@ -2322,9 +2319,26 @@ switchAdmin = function(tab) {
 applyHiddenTabs();
 
 // ══════════════════════════════════════════
-// REALTIME SYNC — ditangani oleh onSnapshot di firebase module script di atas.
-// Listener duplikat dihapus untuk mencegah konflik data.
+// REALTIME SYNC FIRESTORE
 // ══════════════════════════════════════════
+function startRealtimeSync() {
+  if (!window._db || !window._fbOnSnapshot || !window._docRef) return;
+  try {
+    window._fbOnSnapshot(window._docRef, (snap) => {
+      if (!snap.exists()) return;
+      const remote = snap.data();
+      if (!remote) return;
+      Object.assign(appData, remote);
+      renderAll();
+      console.log('[HR Portal] Realtime sync updated');
+    }, (err) => {
+      console.warn('[HR Portal] Realtime sync error:', err);
+    });
+    console.log('[HR Portal] Realtime sync aktif');
+  } catch(e) {
+    console.warn('[HR Portal] Realtime sync tidak tersedia:', e);
+  }
+}
 
 // ══════════════════════════════════════════
 // INIT + URL PARAM HANDLER
