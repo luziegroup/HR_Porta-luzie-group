@@ -1852,14 +1852,15 @@ async function createNewUser() {
     const adminEmail = window._currentUser?.email;
     const adminPass  = document.getElementById('_admin-pass-cache') ? document.getElementById('_admin-pass-cache').value : '';
 
-    // Buat user baru via Firebase Auth
-    const cred = await window._fbCreateUser(email, pass);
-    const uid  = cred.user.uid;
+    // Buat user baru via Firestore custom auth
+    const cred = await window._fbCreateUser(email, pass, name, role, dept);
+    const uid  = cred.uid;
 
-    // Simpan profil ke Firestore users/{uid}
+    // Update profil lengkap ke Firestore users/{uid}
     await window._fbSetDoc(
       window._fbDoc(window._db, 'users', uid),
-      { name, email, dept: dept || '-', role, createdAt: new Date().toISOString() }
+      { name, email: email.toLowerCase(), dept: dept || '-', role, createdAt: new Date().toISOString(), disabled: false },
+      { merge: true }
     );
 
     status.textContent = '✅ Akun berhasil dibuat!';
@@ -1871,16 +1872,6 @@ async function createNewUser() {
     document.getElementById('new-user-email').value = '';
     document.getElementById('new-user-pass').value = '';
     document.getElementById('new-user-dept').value = '';
-
-    // Re-login admin (karena createUser otomatis switch session)
-    // Kita perlu admin login ulang — tampilkan prompt
-    showToast('⚠️ Sesi admin berubah. Silakan login ulang sebagai admin.', 'error');
-    setTimeout(() => {
-      window._fbSignOut().then(() => {
-        pendingPage = '__admin__admin';
-        openLogin();
-      });
-    }, 2000);
 
     // Refresh daftar user
     loadUserList();
