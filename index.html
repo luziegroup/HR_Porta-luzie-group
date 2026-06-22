@@ -651,7 +651,7 @@ footer a { color: var(--muted); text-decoration: none; } footer a:hover { color:
     </div>
     <div class="chat-box">
       <div class="chat-messages" id="chat-msgs">
-        <div class="msg bot"><div class="msg-bubble">Selamat datang di <b>HARA</b> — HR Assistant Luzie Group Digital! 👋<br>Silakan tanyakan apa saja tentang peraturan, cuti, lembur, atau kebijakan perusahaan. Saya siap membantu!</div><div class="msg-time">Sekarang</div></div>
+        <div class="msg bot"><div class="msg-bubble">Hei! Saya <b>HARA</b> — asisten HR Luzie Group. 👋<br><br>Tanyakan apa saja soal peraturan, cuti, lembur, kontrak, atau hal HR lainnya. Saya akan bantu semampu saya.</div><div class="msg-time">Sekarang</div></div>
       </div>
       <div class="chat-chips" id="chat-chips"></div>
       <div class="chat-input-row">
@@ -703,6 +703,7 @@ footer a { color: var(--muted); text-decoration: none; } footer a:hover { color:
       <button class="admin-tab" data-tab="hero" onclick="switchAdmin('hero')">🏠 Beranda</button>
       <button class="admin-tab" data-tab="api" onclick="switchAdmin('api')">🔑 API Key</button>
       <button class="admin-tab" data-tab="users" onclick="switchAdmin('users')">👤 Kelola User</button>
+      <button class="admin-tab" data-tab="dokumen" onclick="switchAdmin('dokumen')">📄 Dokumen PDF</button>
       <button class="admin-tab" data-tab="custommenu" onclick="switchAdmin('custommenu')">🔗 Menu Kustom</button>
       <button class="admin-tab" data-tab="sharelink" onclick="switchAdmin('sharelink')">📎 Copy Link</button>
       <button class="admin-tab" data-tab="__manage__" onclick="switchAdmin('__manage__')" style="margin-left:auto;border-color:rgba(255,92,53,0.3);color:var(--c1)">⚙️ Kelola Tab</button>
@@ -974,6 +975,48 @@ footer a { color: var(--muted); text-decoration: none; } footer a:hover { color:
     </div>
 
 
+    <!-- DOKUMEN PDF -->
+    <div class="admin-section" id="as-dokumen">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div>
+          <div style="font-size:15px;font-weight:600">Dokumen Sumber HARA</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">Upload PDF kebijakan, memo, atau peraturan — isinya otomatis jadi pengetahuan HARA</div>
+        </div>
+        <label class="btn-add" style="cursor:pointer">
+          <i class="ti ti-upload"></i> Upload PDF
+          <input type="file" id="pdf-upload-input" accept=".pdf" multiple style="display:none" onchange="handlePdfUpload(this)">
+        </label>
+      </div>
+
+      <!-- Drop zone -->
+      <div id="pdf-dropzone" style="border:2px dashed rgba(127,119,221,0.35);border-radius:14px;padding:32px;text-align:center;margin-bottom:20px;transition:all .2s;cursor:pointer;background:rgba(127,119,221,0.04)"
+        onclick="document.getElementById('pdf-upload-input').click()"
+        ondragover="event.preventDefault();this.style.borderColor='var(--c1)';this.style.background='rgba(127,119,221,0.1)'"
+        ondragleave="this.style.borderColor='rgba(127,119,221,0.35)';this.style.background='rgba(127,119,221,0.04)'"
+        ondrop="event.preventDefault();this.style.borderColor='rgba(127,119,221,0.35)';this.style.background='rgba(127,119,221,0.04)';handlePdfDrop(event)">
+        <i class="ti ti-file-type-pdf" style="font-size:36px;color:var(--c1);opacity:.6;display:block;margin-bottom:10px"></i>
+        <div style="font-size:14px;font-weight:600;margin-bottom:4px">Drag & drop PDF di sini</div>
+        <div style="font-size:12px;color:var(--muted)">atau klik untuk pilih file · Bisa multiple files · Maks. 10MB/file</div>
+      </div>
+
+      <!-- Progress parsing -->
+      <div id="pdf-parse-progress" style="display:none;margin-bottom:16px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--c3)"><i class="ti ti-loader-2 ti-spin"></i> <span id="pdf-parse-status">Memproses PDF...</span></div>
+        <div style="background:var(--dark3);border-radius:8px;height:6px;overflow:hidden">
+          <div id="pdf-parse-bar" style="height:100%;background:var(--c1);border-radius:8px;width:0%;transition:width .3s"></div>
+        </div>
+      </div>
+
+      <!-- Daftar dokumen -->
+      <div id="pdf-doc-list"></div>
+
+      <!-- Info box -->
+      <div style="margin-top:20px;padding:14px 16px;background:rgba(107,203,255,0.06);border:1px solid rgba(107,203,255,0.2);border-radius:10px;font-size:12px;color:rgba(255,255,255,0.6);display:flex;gap:10px;align-items:flex-start">
+        <i class="ti ti-info-circle" style="color:var(--c3);flex-shrink:0;margin-top:1px"></i>
+        <div>Teks dari PDF disimpan di cloud (Firestore) dan digunakan HARA sebagai konteks jawaban. PDF yang panjang akan dipotong otomatis agar efisien. Dokumen yang sudah di-upload bisa dihapus kapan saja.</div>
+      </div>
+    </div>
+
     <!-- KELOLA TAB -->
     <div class="admin-section" id="as-__manage__">
       <div style="font-size:15px;font-weight:600;margin-bottom:4px">⚙️ Kelola Tab Admin</div>
@@ -1063,7 +1106,20 @@ const DEFAULT_DATA = {
     { q:"Apakah WFH harus disetujui setiap minggunya?", a:"Ya, WFH memerlukan persetujuan atasan langsung. Pengajuan bisa melalui grup divisi atau email langsung ke atasan, paling lambat sehari sebelumnya." },
     { q:"Apa bedanya PKWT dan PKWTT?", a:"PKWT (Perjanjian Kerja Waktu Tertentu) adalah kontrak berbatas waktu, biasanya untuk pekerjaan yang bersifat sementara. PKWTT adalah kontrak karyawan tetap yang tidak memiliki batas waktu." },
     { q:"Bagaimana cara klaim lembur?", a:"Lembur harus disetujui atasan sebelum dilaksanakan. Setelah lembur selesai, ajukan klaim melalui form 'Lembur' di portal ini paling lambat 3 hari setelah lembur dilakukan." },
-    { q:"Ke mana saya harus melapor jika ada pertanyaan?", a:"Hubungi HRD langsung via email hrd@lusie atau ext. 101 (jam kerja). Untuk pertanyaan cepat, gunakan HR Assistant AI di menu 'HR Assistant'." }
+    { q:"Ke mana saya harus melapor jika ada pertanyaan?", a:"Hubungi HRD langsung via email hrd@lusie atau ext. 101 (jam kerja). Untuk pertanyaan cepat, gunakan HR Assistant AI di menu 'HR Assistant'." },
+    { q:"Apakah cuti sakit memotong cuti tahunan?", a:"Tidak. Cuti sakit adalah hak terpisah dan TIDAK memotong jatah cuti tahunan kamu. Untuk sakit 1–2 hari cukup konfirmasi ke atasan. Sakit lebih dari 2 hari wajib melampirkan surat keterangan dokter." },
+    { q:"Berapa hari cuti sakit yang bisa saya ambil?", a:"Cuti sakit tidak dibatasi hari jika disertai surat dokter. Untuk sakit 1–2 hari tanpa surat dokter masih diperbolehkan selama dikonfirmasi ke atasan di hari yang sama. Sakit berkepanjangan akan dikoordinasikan bersama HRD." },
+    { q:"Apakah cuti sakit perlu surat dokter?", a:"Untuk sakit 1–2 hari, cukup konfirmasi ke atasan via WhatsApp/telepon dan isi form izin di portal. Jika sakit lebih dari 2 hari berturut-turut, surat keterangan dokter wajib diserahkan ke HRD." },
+    { q:"Berapa hari cuti saya tersisa?", a:"Saldo cuti tahunan kamu bisa dicek langsung ke HRD atau melalui sistem HRIS. Karyawan yang sudah bekerja minimal 12 bulan mendapat 12 hari cuti tahunan. Saldo berkurang setiap kali cuti tahunan diambil." },
+    { q:"Apakah bisa mengambil cuti setengah hari?", a:"Kebijakan cuti minimal 1 hari per pengambilan. Untuk keperluan setengah hari (misal: urusan dokter atau administrasi), bisa mengajukan izin tidak masuk setengah hari melalui persetujuan atasan langsung, dan ini tidak memotong jatah cuti tahunan." },
+    { q:"Apa itu cuti bersama?", a:"Cuti bersama adalah hari cuti yang ditetapkan perusahaan mengikuti kalender resmi pemerintah. Cuti bersama MEMOTONG jatah cuti tahunan karyawan, jadi perlu diperhitungkan dalam saldo cuti." },
+    { q:"Berapa lama masa percobaan karyawan baru?", a:"Masa percobaan (probation) berlangsung selama 3 bulan sejak tanggal bergabung. Selama masa percobaan, karyawan akan dievaluasi kinerjanya sebelum dikonfirmasi sebagai karyawan tetap atau kontrak." },
+    { q:"Apakah karyawan baru dapat cuti?", a:"Hak cuti tahunan baru berlaku setelah bekerja minimal 12 bulan. Selama masa percobaan dan tahun pertama, karyawan belum mendapat jatah cuti tahunan, namun tetap berhak atas cuti sakit jika diperlukan." },
+    { q:"Bagaimana cara mengajukan izin tidak masuk mendadak?", a:"Segera hubungi atasan langsung via WhatsApp atau telepon sebelum jam masuk kerja. Kemudian isi form 'Izin Tidak Masuk' di menu Pengajuan di portal ini. Jangan tunggu setelah jam masuk — itu bisa dianggap mangkir." },
+    { q:"Apakah ada sanksi jika tidak masuk tanpa izin?", a:"Ya. Tidak masuk tanpa keterangan (mangkir) akan dikenakan potongan gaji harian dan masuk ke catatan pelanggaran. Mangkir berulang bisa berujung pada SP 1 hingga PHK sesuai tingkatan sanksi yang berlaku." },
+    { q:"Berapa maksimal lembur dalam seminggu?", a:"Maksimal lembur adalah 4 jam per hari dan 18 jam per minggu sesuai regulasi ketenagakerjaan. Lembur wajib mendapat persetujuan atasan sebelumnya dan diklaim melalui portal paling lambat 3 hari setelah lembur dilakukan." },
+    { q:"Apakah lembur hari Minggu dibayar berbeda?", a:"Ya. Lembur di hari libur atau hari Minggu dihitung 2× upah per jam sejak jam pertama, berbeda dengan lembur hari kerja yang dihitung 1,5× (jam 1–7) dan 2× (jam selanjutnya)." },
+    { q:"Bagaimana cara absen jika sedang WFH?", a:"Absen tetap wajib melalui aplikasi HRIS meskipun WFH, lengkap dengan selfie dan verifikasi lokasi. Pastikan absen dilakukan pada jam yang sama seperti biasanya (sebelum 08.00 WIB)." }
   ],
   employees: [
     { type:"PKWT", typeColor:"var(--c3)", name:"Andi Kurniawan", dept:"Digital Marketing — SEO Specialist", rows:[{label:"Mulai Kontrak",val:"1 Maret 2024"},{label:"Berakhir",val:"28 Feb 2026"},{label:"Durasi",val:"2 tahun"},{label:"Status",val:"badge-active|Aktif"}] },
@@ -1081,6 +1137,7 @@ const DEFAULT_DATA = {
   heroSub: "Akses peraturan, ajukan cuti & lembur, tanya AI, dan pantau informasi HR perusahaan secara mandiri — kapanpun, di manapun.",
   stats: ["27","12","24/7"],
   credentials: { name:"Andi Kurniawan", email:"andi@pixelpulse.id", password:"12345", adminEmail:"hrd@luzie", adminPassword:"admin123" },
+  pdfDocs: [],
   customMenus: []
 };
 
@@ -1141,6 +1198,7 @@ function showPage(id) {
   window._isAdminPageOpen = (id === 'admin');
   if (id==='policy') renderPolicy();
   if (id==='admin') renderAdmin();
+  if (id==='chat') resetChatHistory();
 }
 function requireLogin(page) {
   if (isLoggedIn) { showPage(page); return; }
@@ -1269,6 +1327,7 @@ function setUserBadge(displayName, initials) {
 async function logout() {
   try {
     await window._fbSignOut();
+    resetChatHistory();
     // onAuthStateLoggedOut handles UI
   } catch(e) {
     showToast('Gagal logout.', 'error');
@@ -1496,7 +1555,7 @@ function updateGroqStatus() {
 async function askGroq(q, policyContext, sysPrompt) {
   const groqKey = getGroqKey();
   if (!groqKey) throw new Error('no-groq-key');
-  const prompt = sysPrompt || ('Kamu adalah HARA, HR Assistant resmi Luzie Group. Jawab dalam Bahasa Indonesia.\n\n' + policyContext);
+  const prompt = sysPrompt || (`Namamu Hara, rekan HRD senior Luzie Group yang ngobrolnya santai tapi akurat. Jawab langsung ke intinya — kalau ada angka per-satuan dan ditanya jumlah berbeda, hitung dulu baru jawab. Jangan karang info yang tidak ada di data.\n\nDATA KEBIJAKAN:\n` + policyContext);
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + groqKey },
@@ -1514,53 +1573,559 @@ async function askGroq(q, policyContext, sysPrompt) {
   return data.choices?.[0]?.message?.content || "Maaf, tidak ada jawaban.";
 }
 
+// ── Jawaban lokal HARA ──
+function localHaraAnswer(q) {
+  const qLow = q.toLowerCase().trim();
+  const userName = window._currentUser?.name ? window._currentUser.name.split(' ')[0] : null;
+
+  // ══════════════════════════════════════════
+  // INTENT DETECTION — urutan penting, yang lebih spesifik di atas
+  // ══════════════════════════════════════════
+
+  // ── 1. Greeting ──
+  if (/^(halo|hai|hi|hei|selamat|pagi|siang|sore|malam|hey|assalamu|permisi)/.test(qLow)) {
+    const hour = new Date().getHours();
+    const greet = hour < 11 ? 'Selamat pagi' : hour < 15 ? 'Selamat siang' : hour < 18 ? 'Selamat sore' : 'Selamat malam';
+    const sapaan = userName ? `, ${userName}` : '';
+    const openers = [
+      `${greet}${sapaan}! 👋 Ada yang bisa saya bantu hari ini?`,
+      `${greet}${sapaan}! Ada pertanyaan seputar HR yang mau kamu tanyakan?`,
+      `${greet}${sapaan}! Mau tanya soal cuti, lembur, peraturan, atau hal lain?`
+    ];
+    return openers[Math.floor(Math.random() * openers.length)];
+  }
+
+  // ── 2. Terima kasih / penutup singkat ──
+  if (/^(terima kasih|makasih|thanks|thx|oke|sip|noted|beres|mantap)/.test(qLow) && qLow.length < 30) {
+    const closings = [
+      `Sama-sama! 😊 Kalau ada pertanyaan lain, saya di sini ya.`,
+      `Siap${userName ? ', ' + userName : ''}! Kalau ada lagi, langsung tanya aja.`,
+      `No problem! Jangan sungkan kalau ada hal lain yang mau ditanyakan.`
+    ];
+    return closings[Math.floor(Math.random() * closings.length)];
+  }
+
+  // ══════════════════════════════════════════
+  // INTENT MAP — setiap intent punya regex ketat + policy key + jawaban default
+  // ══════════════════════════════════════════
+
+  // ── Teks "tidak tahu" yang jujur — dipakai sebagai fallback ──
+  const noInfo = `__NO_DATA__`;
+
+  // ── 2.5 Kalkulasi otomatis — tangkap pola "X hari/unit" sebelum ke AI ──
+  const hitungMatch = qLow.match(/(\d+)\s*(hari|malam|jam|km|kilometer)/);
+  if (hitungMatch) {
+    const jumlah = parseInt(hitungMatch[1]);
+    const satuan = hitungMatch[2];
+    // Cari nilai satuan di semua kebijakan
+    for (const pol of (appData.policies || [])) {
+      for (const item of pol.items) {
+        const haystack = item.points.join(' ');
+        // Cari pola "Rp XXX.XXX/hari" atau "Rp XXX.XXX per hari"
+        const rateMatch = haystack.match(/Rp\s*([\d.,]+)\s*(?:\/|\s*per\s*)\s*(?:hari|malam|jam|km)/i);
+        if (rateMatch && haystack.toLowerCase().includes(satuan)) {
+          const rateStr = rateMatch[1].replace(/\./g,'').replace(',','.');
+          const rate = parseFloat(rateStr);
+          if (!isNaN(rate) && jumlah > 0) {
+            const total = rate * jumlah;
+            const totalFmt = 'Rp' + total.toLocaleString('id-ID');
+            const rateFmt = 'Rp' + rate.toLocaleString('id-ID');
+            // Kembalikan null agar AI tetap menjelaskan konteks, tapi sertakan hint kalkulasi
+            // Kita inject ke localHint di level chatSend — cukup return null di sini agar AI yang jawab dengan data ini
+          }
+        }
+      }
+    }
+  }
+
+  // ── 3. Perjalanan dinas ──
+  if (/perjalanan dinas|perjalan dinas|dinas luar|dinas ke|tugas luar|business trip|sppd/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['perjalanan dinas','dinas luar','sppd'], faqWords: ['perjalanan','dinas','sppd'], fallback: noInfo }, q);
+  }
+
+  // ── 4. Cuti sakit ──
+  if (/cuti sakit|sakit|sick leave/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['cuti sakit','sakit'], faqWords: ['sakit','cuti sakit'], fallback: noInfo }, q);
+  }
+
+  // ── 5. Cuti melahirkan / hamil ──
+  if (/melahirkan|hamil|maternity|bersalin|lahiran/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['melahirkan','hamil','bersalin','maternity'], faqWords: ['melahirkan','hamil','bersalin'], fallback: noInfo }, q);
+  }
+
+  // ── 6. Cuti tahunan / umum ──
+  if (/\bcuti\b|hari off|day off|izin cuti|jatah cuti|sisa cuti/.test(qLow)) {
+    const isSetengah = /setengah|half day|separuh/.test(qLow);
+    const isBersama = /bersama|kolektif/.test(qLow);
+    if (isSetengah) return searchAndAnswer({ policyKeys: ['setengah hari','izin'], faqWords: ['setengah','half'], fallback: noInfo }, q);
+    if (isBersama)  return searchAndAnswer({ policyKeys: ['cuti bersama','kolektif'], faqWords: ['bersama','kolektif'], fallback: noInfo }, q);
+    return searchAndAnswer({ policyKeys: ['cuti tahunan','cuti','jatah cuti'], faqWords: ['cuti','jatah','tahunan'], fallback: noInfo }, q);
+  }
+
+  // ── 7. Lembur ──
+  if (/\blembur\b|overtime|ekstra jam|kerja malam/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['lembur','overtime'], faqWords: ['lembur','overtime'], fallback: noInfo }, q);
+  }
+
+  // ── 8. WFH / kerja dari rumah ──
+  if (/\bwfh\b|work from home|kerja dari rumah|\bremote\b|daring/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['wfh','remote','kerja dari rumah'], faqWords: ['wfh','remote','rumah'], fallback: noInfo }, q);
+  }
+
+  // ── 9. Keterlambatan & sanksi ──
+  if (/\bterlambat\b|telat masuk|\bsanksi\b|surat peringatan|\bsp\b/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['terlambat','disiplin','sanksi'], faqWords: ['terlambat','sanksi'], fallback: noInfo }, q);
+  }
+
+  // ── 10. PKWT / PKWTT / Kontrak ──
+  if (/\bpkwt\b|\bpkwtt\b|kontrak kerja|karyawan tetap|masa percobaan|probation/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['pkwt','pkwtt','kontrak'], faqWords: ['pkwt','pkwtt','kontrak'], fallback: noInfo }, q);
+  }
+
+  // ── 11. BPJS / Jaminan sosial ──
+  if (/\bbpjs\b|jaminan kesehatan|jaminan ketenagakerjaan|\basuransi\b/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['bpjs','jaminan','asuransi'], faqWords: ['bpjs','jaminan'], fallback: noInfo }, q);
+  }
+
+  // ── 12. Gaji / THR ──
+  if (/\bgaji\b|\bthr\b|\bupah\b|slip gaji|lebaran|tunjangan hari raya/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['gaji','thr','upah','tunjangan'], faqWords: ['gaji','thr','upah'], fallback: noInfo }, q);
+  }
+
+  // ── 13. Dress code / Pakaian ──
+  if (/dress code|berpakaian|pakaian kerja|\bseragam\b|casual friday/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['dress code','pakaian','seragam'], faqWords: ['dress code','pakaian'], fallback: noInfo }, q);
+  }
+
+  // ── 14. Absensi / Jam kerja ──
+  if (/\babsen\b|absensi|\bcheck.?in\b|jam kerja|jam masuk|jam kantor|\bhris\b/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['absen','kehadiran','hris','jam kerja'], faqWords: ['absen','kehadiran','jam kerja'], fallback: noInfo }, q);
+  }
+
+  // ── 15. Izin tidak masuk ──
+  if (/izin tidak masuk|mau izin|tidak bisa masuk|mangkir|\balpha\b/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['izin','mangkir','tidak masuk'], faqWords: ['izin','masuk','mendadak'], fallback: noInfo }, q);
+  }
+
+  // ── 16. Reimbursement / Klaim biaya ──
+  if (/reimburse|reimbursement|klaim biaya|bayar balik|pengeluaran dinas/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['reimburse','klaim biaya','pengeluaran'], faqWords: ['reimburse','klaim','biaya'], fallback: noInfo }, q);
+  }
+
+  // ── 17. Resign / PHK / Keluar ──
+  if (/resign|mengundurkan diri|berhenti kerja|\bphk\b|pemutusan hubungan kerja/.test(qLow)) {
+    return searchAndAnswer({ policyKeys: ['resign','pengunduran diri','phk','pemutusan'], faqWords: ['resign','phk','berhenti'], fallback: noInfo }, q);
+  }
+
+  // ══════════════════════════════════════════
+  // FALLBACK: cari di FAQ → kebijakan → PDF
+  // ══════════════════════════════════════════
+
+  // Cari di FAQ dengan skor relevansi
+  const stopWords = new Set(['saya','anda','aku','kamu','yang','ada','dan','atau','ini','itu','di','ke','dari','untuk','dengan','bisa','tidak','apakah','bagaimana','berapa','apa','gimana','boleh','mau','ingin','sudah','baru','jika','kalau','akan','karena','jadi','dong','ya','nya','lah','sih']);
+  const qWords = qLow.split(/\s+/).filter(w => w.length > 3 && !stopWords.has(w));
+
+  const faqHit = scoredFaqSearch(qWords);
+  if (faqHit) return `${faqHit.a}<br><br><small style="opacity:.5;font-size:11px">— Dari FAQ HR Luzie Group</small>`;
+
+  // Cari di kebijakan — hanya pakai kata bermakna (bukan semua kata pertanyaan)
+  const polHit = precisePolicy(qWords);
+  if (polHit) {
+    const poin = polHit.item.points.map(p => `• ${p}`).join('<br>');
+    const sanksi = polHit.item.penalty ? `<br><br>⚠️ <b>Catatan:</b> ${polHit.item.penalty}` : '';
+    return `Soal itu, ini ketentuannya:<br><br><b>${polHit.item.title}</b><br>${poin}${sanksi}<br><br>Ada yang perlu dijelaskan lebih lanjut?`;
+  }
+
+  // Cari di PDF
+  if (appData.pdfDocs && appData.pdfDocs.length) {
+    const hits = [];
+    for (const doc of appData.pdfDocs) {
+      if (!doc.text) continue;
+      const textLow = doc.text.toLowerCase();
+      const matchWords = qWords.filter(w => textLow.includes(w));
+      if (matchWords.length >= 2) {
+        const sentences = doc.text.split(/(?<=[.!?])\s+|\n/).filter(s => s.trim().length > 20);
+        const relevant = sentences.filter(s => matchWords.some(w => s.toLowerCase().includes(w))).slice(0, 8);
+        if (relevant.length) hits.push({ name: doc.name, excerpt: relevant.join(' ').slice(0, 1200), fullText: doc.text.slice(0, 3000) });
+      }
+    }
+    if (hits.length) return '__PDF_HIT__' + JSON.stringify(hits);
+  }
+
+  // Tidak ditemukan sama sekali
+  const suggestions = [['cuti tahunan','berapa jatah cuti'],['lembur','cara klaim lembur'],['WFH','aturan kerja remote'],['PKWT vs PKWTT','beda jenis kontrak'],['perjalanan dinas','prosedur dinas luar']];
+  const pick = suggestions.sort(() => Math.random() - 0.5).slice(0, 2).map(s => `<b>${s[0]}</b>`).join(' atau ');
+  return `Saya belum punya info spesifik untuk pertanyaan itu. Mungkin bisa coba tanya tentang ${pick}?<br><br>Atau cek langsung di menu <b>Peraturan</b> dan <b>FAQ</b>. Kalau butuh jawaban resmi, tim HRD siap membantu di ext. 101.`;
+}
+
+// ── Helper: pencarian FAQ berdasarkan skor ──
+function scoredFaqSearch(words) {
+  if (!words || !words.length) return null;
+  let best = null, bestScore = 0;
+  for (const f of (appData.faqs || [])) {
+    const hay = (f.q + ' ' + f.a).toLowerCase();
+    let score = 0;
+    for (const w of words) {
+      if (hay.includes(w)) { score += 2; if (f.q.toLowerCase().includes(w)) score += 1; }
+    }
+    const coverage = words.filter(w => hay.includes(w)).length / Math.max(words.length, 1);
+    if (coverage >= 0.6) score += 3;
+    if (score > bestScore) { bestScore = score; best = f; }
+  }
+  return bestScore >= 5 ? best : null; // threshold lebih tinggi = lebih presisi
+}
+
+// ── Helper: cari kebijakan hanya dari kata bermakna + threshold skor ──
+function precisePolicy(meaningfulWords) {
+  if (!meaningfulWords || !meaningfulWords.length) return null;
+  let best = null, bestScore = 0;
+  for (const pol of (appData.policies || [])) {
+    for (const item of pol.items) {
+      const hay = (pol.cat + ' ' + item.title + ' ' + item.points.join(' ')).toLowerCase();
+      let score = 0;
+      for (const w of meaningfulWords) { if (hay.includes(w)) score += 2; }
+      // Bonus kalau kata cocok di judul item (bukan hanya di deskripsi)
+      for (const w of meaningfulWords) { if (item.title.toLowerCase().includes(w)) score += 2; }
+      if (score > bestScore) { bestScore = score; best = { cat: pol.cat, item }; }
+    }
+  }
+  return bestScore >= 6 ? best : null; // threshold tinggi mencegah false-positive
+}
+
+// ── Helper: searchAndAnswer — cari di policy/FAQ dulu, return null kalau tidak ada ──
+function searchAndAnswer({ policyKeys, faqWords, fallback, intro }, q) {
+  // Cari FAQ
+  const faqHit = scoredFaqSearch(faqWords || []);
+  if (faqHit) return (intro ? intro + '<br><br>' : '') + faqHit.a + `<br><br><small style="opacity:.5;font-size:11px">— Dari FAQ HR Luzie Group</small>`;
+  // Cari kebijakan dengan key spesifik
+  for (const pol of (appData.policies || [])) {
+    for (const item of pol.items) {
+      const hay = (pol.cat + ' ' + item.title + ' ' + item.points.join(' ')).toLowerCase();
+      if (policyKeys.some(k => hay.includes(k))) {
+        const poin = item.points.map(p => '• ' + p).join('<br>');
+        const sanksi = item.penalty ? '<br><br>⚠️ <b>Catatan:</b> ' + item.penalty : '';
+        return (intro ? intro + '<br><br>' : '') + '<b>' + item.title + '</b><br>' + poin + sanksi + '<br><br>Ada yang mau ditanyakan lebih lanjut?';
+      }
+    }
+  }
+  // Kalau fallback __NO_DATA__ atau null, kembalikan null agar diteruskan ke AI
+  return (fallback === '__NO_DATA__' || fallback == null) ? null : fallback;
+}
+
+// ── Conversation history untuk multi-turn context ──
+let _chatHistory = [];
+
 async function chatSend() {
   const apiKey  = getApiKey();
   const groqKey = getGroqKey();
-  if (!apiKey && !groqKey) {
-    addChatMsg('bot','⚠️ API key belum diset. Admin perlu mengisi Anthropic atau Groq API key di menu <b>Admin → API Key</b>.');
-    return;
-  }
   const inp = document.getElementById('chat-inp');
   const q = inp.value.trim(); if(!q) return;
   inp.value='';
   document.getElementById('chat-send-btn').disabled=true;
   addChatMsg('user', q);
   showTyping();
+
   const nl = '\n';
   const policyContext = appData.policies.map(p=>p.items.map(i=>'['+p.cat+'] '+i.title+':'+nl+'- '+i.points.join(nl+'- ')+nl+'Sanksi: '+(i.penalty||'-')).join(nl)).join(nl+nl);
-  const sysPrompt = 'Kamu adalah HARA, HR Assistant resmi Luzie Group. Jawab pertanyaan karyawan tentang peraturan perusahaan dengan ramah, jelas, dan ringkas dalam Bahasa Indonesia. Gunakan data berikut:'+nl+nl+policyContext+nl+nl+'Jika tidak ada di data, sarankan hubungi HRD langsung. Maks. 3 paragraf pendek.';
+  const faqContext = (appData.faqs||[]).map(f=>'T: '+f.q+nl+'J: '+f.a).join(nl+nl);
+  const pdfContext = getPdfContext();
+  const userName = window._currentUser?.name ? window._currentUser.name.split(' ')[0] : null;
+
+  const qLow = q.toLowerCase().trim();
+
+  // ── Deteksi pertanyaan follow-up / referensial ──
+  // Hanya dianggap follow-up kalau ada kata referensial yang jelas merujuk konteks sebelumnya.
+  // Panjang kalimat TIDAK digunakan sebagai kondisi — kalimat pendek bisa saja pertanyaan baru.
+  const hasReferentialWord = /\b(itu|tadi|tersebut|peraturannya|kebijakannya|maksudnya|gimana kalau|bagaimana jika|terus kalau|lalu bagaimana|ada sk|ada peraturan|ada kebijakan|surat keputusan|\bsk\b|yang tadi|yang itu|hal tersebut|soal itu|soal tadi|tentang itu|tentang tadi|lebih lanjut|lebih detail|bisa dijelaskan|tolong jelaskan|apakah ada|adakah|dan bagaimana|lalu apa|terus apa|selanjutnya|kalau begitu|berarti|jadi kalau|lanjut|oh iya)\b/.test(qLow);
+  // Pertanyaan sangat pendek (< 20 karakter) tanpa kata kunci topik baru bisa dianggap follow-up
+  const isVeryShortAmbiguous = _chatHistory.length >= 2 && qLow.length < 20 && !/perjalanan|cuti|lembur|wfh|gaji|thr|bpjs|pkwt|resign|absen|dress|reimburse|izin/.test(qLow);
+  const isFollowUp = _chatHistory.length >= 2 && (hasReferentialWord || isVeryShortAmbiguous);
+
+  // ── LANGKAH 1: Cek PDF hit & localCheck dulu (skip kalau follow-up) ──
+  const localCheck = isFollowUp ? null : localHaraAnswer(q);
+
+  // ── Bangun localHint sebagai anchor untuk AI (mencegah halusinasi) ──
+  const isNoData = localCheck === null || (typeof localCheck === 'string' && (localCheck.startsWith('__NO_DATA__') || localCheck.includes('belum punya info')));
+  const localHint = (!isNoData && localCheck && !localCheck.startsWith('__PDF_HIT__') && !localCheck.startsWith('__NO_DATA__'))
+    ? `\n\n## RINGKASAN JAWABAN DATABASE LOKAL\nBerikut adalah jawaban yang sudah ditemukan dari database lokal — gunakan ini sebagai acuan utama, jangan abaikan:\n${localCheck.replace(/<[^>]+>/g,'')}`
+    : '';
+
+  // ── Bangun kalkulasi hint — inject nilai satuan agar AI bisa hitung ──
+  const qLow2 = q.toLowerCase();
+  const angkaMatch = qLow2.match(/(\d+)\s*(hari|malam|jam)/);
+  let kalkulasiHint = '';
+  if (angkaMatch) {
+    const jumlahDiminta = parseInt(angkaMatch[1]);
+    const satuanDiminta = angkaMatch[2];
+    for (const pol of (appData.policies || [])) {
+      for (const item of pol.items) {
+        const haystack = item.points.join(' ');
+        const rateRegex = /Rp\s*([\d.]+)\s*(?:\/|\s*per\s*)\s*(hari|malam|jam)/gi;
+        let rm;
+        while ((rm = rateRegex.exec(haystack)) !== null) {
+          if (rm[2].toLowerCase() === satuanDiminta) {
+            const rate = parseInt(rm[1].replace(/\./g,''));
+            if (!isNaN(rate)) {
+              const total = rate * jumlahDiminta;
+              kalkulasiHint = `\n\n## BANTUAN KALKULASI\nUser menanyakan ${jumlahDiminta} ${satuanDiminta}. Dari data kebijakan ditemukan nilai: Rp${rate.toLocaleString('id-ID')} per ${satuanDiminta}.\nHasil kalkulasi: ${jumlahDiminta} × Rp${rate.toLocaleString('id-ID')} = Rp${total.toLocaleString('id-ID')}.\nGunakan angka ini dalam jawabanmu — tunjukkan rumus singkatnya.`;
+              break;
+            }
+          }
+        }
+        if (kalkulasiHint) break;
+      }
+      if (kalkulasiHint) break;
+    }
+  }
+
+  const sysPrompt = `Namamu Hara. Kamu bukan asisten virtual generik — kamu seperti rekan kerja HRD senior yang paling enak diajak ngobrol. Orang datang ke kamu bukan karena kamu formal, tapi karena kamu jelas, jujur, dan manusiawi.
+${userName ? `\nKamu sedang ngobrol dengan ${userName}. Sesekali sebut namanya biar terasa personal — tapi jangan tiap kalimat, itu malah aneh.` : ''}
+
+Cara kamu ngobrol: santai tapi akurat. Kayak ngobrol di pantry kantor, bukan baca peraturan perusahaan. Langsung ke intinya — tidak ada "Tentu saja! Pertanyaan yang sangat bagus!" karena itu buang waktu. Jangan pernah sebut diri kamu AI atau robot kecuali ditanya langsung.
+
+---
+
+YANG PALING PENTING — KALKULASI:
+Kalau data menyebut nilai per-satuan (per hari, per km, per unit), kamu WAJIB hitung sendiri kalau ditanya jumlah berbeda. Jangan jawab panjang lebar tanpa angka.
+
+Cara yang benar:
+- Tanya: "Kalau dinas 4 hari dapat berapa?"
+- Jawab: "4 hari × Rp[X] = Rp[hasil]. Itu udah termasuk [komponen], tapi [komponen lain] tetap ditagih terpisah."
+
+Cara yang salah (JANGAN LAKUKAN):
+- "Berdasarkan kebijakan perusahaan, uang harian perjalanan dinas adalah Rp[X] per hari sesuai ketentuan yang berlaku."
+Jawaban seperti ini tidak membantu karena tidak menjawab pertanyaan yang sebenarnya ditanyakan.
+
+---
+
+NALAR KONTEKS:
+Kalau ada pertanyaan "bagaimana kalau...", "boleh nggak...", atau skenario gabungan — nalar dulu dari kebijakan yang ada, baru jawab. Jangan lempar balik ke karyawan tanpa berusaha menjawab.
+
+Kalau situasinya benar-benar tidak ada di data: "Untuk yang ini aku belum punya info pastinya — lebih aman konfirmasi langsung ke HRD ya."
+
+---
+
+EMPATI DULU, PROSEDUR KEMUDIAN:
+Kalau karyawan cerita mau resign, lagi stres, atau ada masalah dengan atasan — dengarkan dulu, acknowledge dulu. Baru kalau mereka minta info prosedur, kasih. Jangan langsung buka "daftar langkah resign".
+
+---
+
+TANYA BALIK KALAU AMBIGU:
+Kalau pertanyaannya kurang jelas, tanya balik — tapi cukup 1 hal yang paling penting. Jangan lempar 3 pertanyaan sekaligus.
+Contoh: "Dinasnya dalam kota atau luar kota?" — simpel, langsung ke inti.
+
+---
+
+CONTOH DIALOG (pelajari nadanya):
+
+Karyawan: "Kalau dinas 5 hari dapat berapa?"
+Hara: "5 hari × Rp[X] = Rp[hasil]. Itu uang harian ya — tiket dan hotel tetap reimburse terpisah pakai bukti. Udah ada jadwal berangkatnya?"
+
+Karyawan: "Cuti sakit harus pakai surat dokter?"
+Hara: "1–2 hari biasanya tidak perlu. Lebih dari itu, surat dokter diperlukan. Lagi tidak enak badan sekarang?"
+
+Karyawan: "Kayaknya mau resign deh, udah nggak kuat."
+Hara: "Wah, kedengarannya berat banget. Mau cerita situasinya? Mungkin ada yang bisa dibantu dulu sebelum sampai ke keputusan itu."
+
+Karyawan: "Bonus kapan cair?"
+Hara: "Untuk jadwal pencairan bonus, aku tidak punya info pastinya di sini. Langsung tanya ke Finance atau HRD ya — mereka yang pegang jadwalnya."
+
+---
+
+ANTI-HALUSINASI (tidak boleh dilanggar):
+- Jawab hanya dari data kebijakan di bawah. Jangan karang angka, prosedur, atau nama yang tidak ada.
+- Kalau ada Ringkasan Database Lokal, jadikan itu acuan utama — itu data yang sudah diverifikasi.
+- Lebih baik jujur tidak tahu daripada jawab salah.
+
+---
+
+DATA KEBIJAKAN PERUSAHAAN:
+
+## KEBIJAKAN
+${policyContext}
+
+## FAQ
+${faqContext}${pdfContext ? `\n\n## DOKUMEN RESMI (SK & Peraturan yang sudah diupload)\n${pdfContext}` : ''}${localHint}${kalkulasiHint}`;
 
   let ans = null;
 
-  // Coba Anthropic dulu
-  if (apiKey) {
+  // ── PDF hit — pakai konteks dokumen penuh ──
+  if (localCheck && localCheck.startsWith('__PDF_HIT__')) {
+    const pdfHits = JSON.parse(localCheck.slice(11));
+    const docContext = pdfHits.map(h => `=== DOKUMEN: ${h.name} ===\n${h.fullText}`).join('\n\n');
+
+    const pdfSysPrompt = `Namamu Hara — rekan HRD senior yang ngobrolnya enak, bukan robot pembaca dokumen.
+${userName ? `Kamu lagi ngobrol dengan ${userName}.` : ''}
+
+Kamu baru saja diberi dokumen kebijakan perusahaan. Tugasmu bukan membacakan ulang isinya — tapi menjelaskannya dengan bahasa yang mudah dicerna, seperti teman kerja yang menjelaskan aturan sambil ngobrol santai.
+
+Yang wajib kamu lakukan:
+- Kalau ada angka per-satuan (Rp/hari, Rp/km, dll) dan ditanya jumlah berbeda → HITUNG dulu, baru jawab. Tunjukkan rumusnya singkat: "3 hari × Rp[X] = Rp[hasil]"
+- Jawab langsung ke intinya. Tidak ada "Berdasarkan dokumen yang diberikan..." — itu tidak perlu
+- Kalau ada langkah prosedur, tampilkan dengan nomor yang jelas
+- Kalau pertanyaannya kurang jelas, tanya balik 1 hal paling penting saja
+
+Yang tidak boleh dilakukan:
+- Jangan suruh user "buka dokumen sendiri" — kamu yang jelaskan
+- Jangan mulai dengan "Tentu!", "Baik sekali!", atau basa-basi kosong
+- Jangan karang info yang tidak ada di dokumen. Kalau dokumen tidak menjawab: "Untuk ini dokumen tidak menyebut detailnya — konfirmasi ke HRD ya."
+
+DOKUMEN RESMI PERUSAHAAN:
+${docContext}`;
+
+    if (apiKey && apiKey.startsWith('sk-ant-')) {
+      try {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+          body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1000, system: pdfSysPrompt, messages: [{ role: "user", content: q }] })
+        });
+        const d = await res.json();
+        if (d.content?.[0]?.text && !d.error) ans = d.content[0].text;
+      } catch(e) { console.warn('PDF Anthropic error:', e); }
+    }
+
+    if (!ans && groqKey) {
+      try { ans = await askGroq(q, '', pdfSysPrompt); } catch(e) { console.warn('PDF Groq error:', e); }
+    }
+
+    if (!ans) {
+      ans = synthesizePdfAnswer(q, pdfHits);
+    }
+
+    _chatHistory.push({ role: 'user', content: q });
+    _chatHistory.push({ role: 'assistant', content: (ans||'').replace(/<[^>]+>/g,'') });
+    if (_chatHistory.length > 20) _chatHistory = _chatHistory.slice(-20);
+
+    removeTyping();
+    addChatMsg('bot', (ans || '').replace(/\n/g, '<br>'));
+    document.getElementById('chat-send-btn').disabled = false;
+    return;
+  }
+
+  // ── Coba Anthropic dengan history + context + localHint ──
+  if (apiKey && apiKey.startsWith('sk-ant-')) {
     try {
+      // Susun messages dengan history (max 10 turn terakhir)
+      const historyMessages = _chatHistory.slice(-10);
+      const messages = [...historyMessages, { role: 'user', content: q }];
+
       const res = await fetch("https://api.anthropic.com/v1/messages",{
         method:"POST",
         headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
         body: JSON.stringify({
           model:"claude-haiku-4-5-20251001", max_tokens:800,
           system: sysPrompt,
-          messages:[{role:"user",content:q}]
+          messages: messages
         })
       });
       const data = await res.json();
-      if (!data.error) ans = data.content?.[0]?.text;
+      if (data.content?.[0]?.text && !data.error) ans = data.content[0].text;
     } catch(e) { console.warn('Anthropic error, fallback ke Groq:', e); }
   }
 
-  // Fallback ke Groq kalau Anthropic gagal/kosong
+  // Fallback ke Groq
   if (!ans && groqKey) {
     try {
-      ans = await askGroq(q, policyContext, sysPrompt);
+      // Groq: kirim history sebagai bagian messages
+      const historyMessages = _chatHistory.slice(-10);
+      const groqKey_ = getGroqKey();
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + groqKey_ },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          max_tokens: 800,
+          messages: [
+            { role: "system", content: sysPrompt },
+            ...historyMessages,
+            { role: "user", content: q }
+          ]
+        })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      ans = data.choices?.[0]?.message?.content || null;
     } catch(e) { console.warn('Groq error:', e); }
   }
 
+  // Fallback lokal — hanya pakai kalau localCheck benar-benar punya data
+  if (!ans) {
+    const hasLocalData = localCheck && !localCheck.startsWith('__NO_DATA__') && !localCheck.startsWith('__PDF_HIT__');
+    if (hasLocalData) {
+      ans = localCheck;
+      const botMsg = ans + (!apiKey && !groqKey ? '<br><br><small style="opacity:.5;font-size:11px">💡 Jawaban dari database lokal. Set API key di Admin → API Key untuk jawaban AI yang lebih cerdas.</small>' : '');
+      // Simpan ke history dulu baru tampilkan
+      _chatHistory.push({ role: 'user', content: q });
+      _chatHistory.push({ role: 'assistant', content: ans.replace(/<[^>]+>/g,'') });
+      if (_chatHistory.length > 20) _chatHistory = _chatHistory.slice(-20);
+      removeTyping();
+      addChatMsg('bot', botMsg);
+    } else {
+      // Tidak ada data sama sekali — jujur bilang tidak tahu
+      const noDataMsg = isFollowUp
+        ? 'Untuk pertanyaan lanjutan ini, saya butuh API key aktif agar bisa memahami konteks percakapan sebelumnya. Coba tanyakan langsung ke HRD ya 🙏<br><br><small style="opacity:.5;font-size:11px">💡 Set API key di Admin → API Key agar HARA bisa menjawab pertanyaan lanjutan.</small>'
+        : 'Saya belum punya info resmi soal itu di database perusahaan. Untuk jawaban yang akurat, coba tanyakan langsung ke HRD ya 🙏<br><br><small style="opacity:.5;font-size:11px">💡 Set API key di Admin → API Key agar HARA bisa menjawab lebih luas.</small>';
+      // Tetap simpan pertanyaan ke history (agar AI tahu konteks di pesan berikutnya)
+      _chatHistory.push({ role: 'user', content: q });
+      _chatHistory.push({ role: 'assistant', content: 'Maaf, saya belum punya info soal itu. Silakan tanya langsung ke HRD.' });
+      if (_chatHistory.length > 20) _chatHistory = _chatHistory.slice(-20);
+      removeTyping();
+      addChatMsg('bot', noDataMsg);
+    }
+    document.getElementById('chat-send-btn').disabled=false;
+    return;
+  }
+
+  // Simpan ke history
+  _chatHistory.push({ role: 'user', content: q });
+  _chatHistory.push({ role: 'assistant', content: ans.replace(/<[^>]+>/g,'') });
+  if (_chatHistory.length > 20) _chatHistory = _chatHistory.slice(-20);
+
   removeTyping();
   if (ans) addChatMsg('bot', ans.replace(/\n/g,'<br>'));
-  else addChatMsg('bot','\u26a0\ufe0f Maaf, kedua layanan AI sedang tidak tersedia. Silakan coba lagi.');
   document.getElementById('chat-send-btn').disabled=false;
+}
+
+// Reset history saat ganti page / logout
+function resetChatHistory() { _chatHistory = []; }
+
+// ── Synthesize jawaban PDF tanpa API — natural, bukan raw dump ──
+function synthesizePdfAnswer(q, hits) {
+  const qLow = q.toLowerCase();
+
+  // Coba ekstrak struktur dari teks: cari kalimat yang mengandung kata kerja prosedur
+  const procedureWords = ['harus','wajib','perlu','langkah','prosedur','tahap','cara','ajukan','submit','minta','dapatkan','disetujui','sebelum','setelah','dengan'];
+
+  const allSentences = [];
+  for (const h of hits) {
+    const sents = h.fullText.split(/(?<=[.!?])\s+|\n/).filter(s => s.trim().length > 20 && s.trim().length < 300);
+    allSentences.push(...sents.map(s => s.trim()));
+  }
+
+  // Skor tiap kalimat: relevan ke pertanyaan + mengandung kata prosedur
+  const qWords = qLow.split(/\s+/).filter(w => w.length > 3);
+  const scored = allSentences.map(s => {
+    const sLow = s.toLowerCase();
+    let score = 0;
+    qWords.forEach(w => { if (sLow.includes(w)) score += 2; });
+    procedureWords.forEach(w => { if (sLow.includes(w)) score += 1; });
+    return { s, score };
+  }).filter(x => x.score >= 2).sort((a,b) => b.score - a.score);
+
+  const topSents = scored.slice(0, 6).map(x => x.s);
+
+  if (topSents.length === 0) {
+    return `Saya menemukan dokumen terkait tapi butuh sedikit bantuan untuk menjelaskannya secara detail. Bisa coba aktifkan API key di Admin → API Key agar saya bisa menjelaskan isinya dengan lebih baik, atau cek langsung dokumen di menu yang tersedia ya.`;
+  }
+
+  // Format jadi paragraf natural
+  const docName = hits[0].name.replace(/\.pdf$|\.docx$/i,'');
+  const intro = `Soal itu, ada ketentuannya di <b>${esc(docName)}</b>. Ini yang perlu kamu tahu:`;
+  const body = topSents.map((s, i) => `${i+1}. ${esc(s)}`).join('<br>');
+  const outro = `<br><br>Kalau ada bagian yang masih kurang jelas, tanyakan lagi ya — atau aktifkan API key untuk penjelasan yang lebih lengkap.`;
+
+  return `${intro}<br><br>${body}${outro}`;
 }
 
 // ══════════════════════════════════════════
@@ -1599,6 +2164,7 @@ function renderAdmin() {
   renderHeroEditor();
   renderApiEditor();
   renderCustomMenuEditor();
+  renderDocEditor();
   // User list dimuat saat tab diklik (via loadUserList())
 }
 
@@ -2001,6 +2567,179 @@ function renderAll() {
 }
 
 // ══════════════════════════════════════════
+// DOKUMEN PDF — HARA Knowledge Base
+// ══════════════════════════════════════════
+
+// Load PDF.js dari CDN
+function loadPdfJs() {
+  return new Promise((resolve) => {
+    if (window.pdfjsLib) { resolve(window.pdfjsLib); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    s.onload = () => {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      resolve(window.pdfjsLib);
+    };
+    document.head.appendChild(s);
+  });
+}
+
+async function parsePdfFile(file) {
+  const pdfjsLib = await loadPdfJs();
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let fullText = '';
+  const total = pdf.numPages;
+  for (let i = 1; i <= total; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items.map(item => item.str).join(' ');
+    fullText += pageText + '\n';
+    // Update progress bar
+    const pct = Math.round((i / total) * 100);
+    const bar = document.getElementById('pdf-parse-bar');
+    const stat = document.getElementById('pdf-parse-status');
+    if (bar) bar.style.width = pct + '%';
+    if (stat) stat.textContent = `Membaca halaman ${i} dari ${total}...`;
+  }
+  return fullText.trim();
+}
+
+async function handlePdfUpload(input) {
+  const files = Array.from(input.files);
+  if (!files.length) return;
+  await processPdfFiles(files);
+  input.value = ''; // reset input
+}
+
+async function handlePdfDrop(event) {
+  const files = Array.from(event.dataTransfer.files).filter(f => f.type === 'application/pdf');
+  if (!files.length) { showToast('Hanya file PDF yang diterima.', 'error'); return; }
+  await processPdfFiles(files);
+}
+
+async function processPdfFiles(files) {
+  if (!appData.pdfDocs) appData.pdfDocs = [];
+  const progress = document.getElementById('pdf-parse-progress');
+  if (progress) progress.style.display = 'block';
+
+  for (const file of files) {
+    if (file.size > 10 * 1024 * 1024) {
+      showToast(`"${file.name}" terlalu besar (maks. 10MB).`, 'error');
+      continue;
+    }
+    const stat = document.getElementById('pdf-parse-status');
+    if (stat) stat.textContent = `Memproses: ${file.name}...`;
+    const bar = document.getElementById('pdf-parse-bar');
+    if (bar) bar.style.width = '0%';
+
+    try {
+      const rawText = await parsePdfFile(file);
+      // Potong teks maks. 8000 karakter per dokumen agar Firestore efisien
+      const text = rawText.slice(0, 8000);
+      const doc = {
+        id: 'pdf_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        name: file.name,
+        size: (file.size / 1024).toFixed(1) + ' KB',
+        pages: rawText.length > 0 ? '—' : '0',
+        uploadedAt: new Date().toLocaleDateString('id-ID'),
+        charCount: text.length,
+        text: text
+      };
+      appData.pdfDocs.push(doc);
+      showToast(`✅ "${file.name}" berhasil diproses!`, 'success');
+    } catch(e) {
+      console.error('PDF parse error:', e);
+      showToast(`Gagal membaca "${file.name}": ${e.message}`, 'error');
+    }
+  }
+
+  if (progress) progress.style.display = 'none';
+  saveAndRefresh();
+  renderDocEditor();
+}
+
+function renderDocEditor() {
+  if (!appData.pdfDocs) appData.pdfDocs = [];
+  const c = document.getElementById('pdf-doc-list');
+  if (!c) return;
+
+  if (!appData.pdfDocs.length) {
+    c.innerHTML = `<div style="text-align:center;padding:24px;color:var(--muted);font-size:13px">
+      <i class="ti ti-file-off" style="font-size:28px;display:block;margin-bottom:8px;opacity:.3"></i>
+      Belum ada dokumen. Upload PDF kebijakan atau memo di atas.
+    </div>`;
+    return;
+  }
+
+  c.innerHTML = appData.pdfDocs.map((doc, i) => `
+    <div style="display:flex;align-items:center;gap:14px;padding:14px 16px;background:var(--dark2);border:1px solid rgba(255,255,255,0.07);border-radius:12px;margin-bottom:8px;transition:border-color .15s" onmouseover="this.style.borderColor='rgba(255,255,255,0.15)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.07)'">
+      <div style="width:44px;height:44px;border-radius:10px;background:rgba(255,92,53,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <i class="ti ti-file-type-pdf" style="font-size:22px;color:#FF6B6B"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(doc.name)}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:12px">
+          <span><i class="ti ti-file-text" style="font-size:10px"></i> ${doc.charCount?.toLocaleString() || '—'} karakter terbaca</span>
+          <span><i class="ti ti-database" style="font-size:10px"></i> ${doc.size}</span>
+          <span><i class="ti ti-calendar" style="font-size:10px"></i> ${doc.uploadedAt}</span>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+        <span style="background:rgba(168,240,160,0.1);border:1px solid rgba(168,240,160,0.25);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;color:#A8F0A0">
+          <i class="ti ti-brain"></i> Aktif di HARA
+        </span>
+        <button onclick="previewDoc(${i})" style="background:var(--dark3);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:var(--muted);cursor:pointer;padding:6px 10px;font-size:12px;transition:all .15s" onmouseover="this.style.color='var(--white)'" onmouseout="this.style.color='var(--muted)'">
+          <i class="ti ti-eye"></i>
+        </button>
+        <button onclick="deleteDoc(${i})" style="background:rgba(255,92,53,0.08);border:1px solid rgba(255,92,53,0.2);border-radius:8px;color:#FF6B6B;cursor:pointer;padding:6px 10px;font-size:12px;transition:all .15s" onmouseover="this.style.background='rgba(255,92,53,0.18)'" onmouseout="this.style.background='rgba(255,92,53,0.08)'">
+          <i class="ti ti-trash"></i>
+        </button>
+      </div>
+    </div>`).join('');
+}
+
+function previewDoc(i) {
+  const doc = appData.pdfDocs[i];
+  if (!doc) return;
+  const preview = doc.text.slice(0, 1200).replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const truncated = doc.text.length > 1200 ? `<span style="color:var(--muted)">... (${(doc.text.length - 1200).toLocaleString()} karakter lainnya tersimpan)</span>` : '';
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.innerHTML = `
+    <div style="background:var(--dark2);border:1px solid rgba(255,255,255,0.1);border-radius:16px;width:100%;max-width:680px;max-height:80vh;display:flex;flex-direction:column">
+      <div style="padding:18px 20px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-size:14px;font-weight:600"><i class="ti ti-file-type-pdf" style="color:#FF6B6B"></i> ${esc(doc.name)}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">${doc.charCount?.toLocaleString()} karakter · Pratinjau 1200 karakter pertama</div>
+        </div>
+        <button onclick="this.closest('div[style*=\"fixed\"]').remove()" style="background:var(--dark3);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:var(--muted);cursor:pointer;padding:6px 10px;font-size:14px"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:20px;overflow-y:auto;font-size:12px;line-height:1.8;color:rgba(255,255,255,0.7);white-space:pre-wrap;font-family:monospace">${preview}${truncated}</div>
+    </div>`;
+  modal.onclick = e => { if (e.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+}
+
+function deleteDoc(i) {
+  const doc = appData.pdfDocs[i];
+  if (!confirm(`Hapus dokumen "${doc.name}" dari HARA?\n\nHARA tidak akan lagi menggunakan dokumen ini.`)) return;
+  appData.pdfDocs.splice(i, 1);
+  saveAndRefresh();
+  renderDocEditor();
+  showToast('Dokumen dihapus.', 'success');
+}
+
+// ── Buat konteks PDF untuk HARA ──
+function getPdfContext() {
+  if (!appData.pdfDocs || !appData.pdfDocs.length) return '';
+  return appData.pdfDocs.map(doc =>
+    `=== DOKUMEN: ${doc.name} (diunggah ${doc.uploadedAt}) ===\n${doc.text}\n`
+  ).join('\n');
+}
+
+// ══════════════════════════════════════════
 // MENU KUSTOM
 // ══════════════════════════════════════════
 function renderCustomMenuEditor() {
@@ -2223,6 +2962,7 @@ const ALL_TABS = [
   { tab:'hero',       label:'🏠 Beranda' },
   { tab:'api',        label:'🔑 API Key' },
   { tab:'users',      label:'👤 Kelola User' },
+  { tab:'dokumen',    label:'📄 Dokumen PDF' },
   { tab:'custommenu', label:'🔗 Menu Kustom' },
   { tab:'sharelink',  label:'📎 Copy Link' },
 ];
@@ -2301,14 +3041,22 @@ applyHiddenTabs();
 // ══════════════════════════════════════════
 function startRealtimeSync() {
   if (!window._db || !window._fbOnSnapshot || !window._docRef) return;
+  // Hindari duplikasi listener — listener utama sudah ada di modul Firebase
+  // startRealtimeSync hanya dijalankan sekali dan tidak menduplikasi listener
+  if (window._realtimeSyncListener) return;
   try {
-    window._fbOnSnapshot(window._docRef, (snap) => {
+    window._realtimeSyncListener = window._fbOnSnapshot(window._docRef, (snap) => {
       if (!snap.exists()) return;
       const remote = snap.data();
-      if (!remote) return;
-      Object.assign(appData, remote);
-      renderAll();
-      console.log('[HR Portal] Realtime sync updated');
+      if (!remote || !remote.payload) return;
+      try {
+        const parsed = JSON.parse(remote.payload);
+        Object.assign(appData, parsed);
+        renderAll();
+        console.log('[HR Portal] Realtime sync updated');
+      } catch(e) {
+        console.warn('[HR Portal] Gagal parse payload:', e);
+      }
     }, (err) => {
       console.warn('[HR Portal] Realtime sync error:', err);
     });
