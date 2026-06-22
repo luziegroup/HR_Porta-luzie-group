@@ -525,7 +525,7 @@ footer a { color: var(--muted); text-decoration: none; } footer a:hover { color:
   <div class="nav-links">
     <button class="nav-link active" id="nl-home" onclick="showPage('home')">Beranda</button>
     <button class="nav-link" id="nl-policy" onclick="showPage('policy')">Peraturan</button>
-    <button class="nav-link" id="nl-pkwt" onclick="showPage('pkwt')">PKWT/PKWTT</button>
+    <button class="nav-link" id="nl-pkwt" onclick="requireLogin('pkwt')">PKWT/PKWTT</button>
     <button class="nav-link" id="nl-org" onclick="showPage('org')">Struktur</button>
     <button class="nav-link" id="nl-faq" onclick="showPage('faq')">FAQ</button>
     <button class="nav-link" id="nl-form" onclick="requireLogin('form')">Pengajuan</button>
@@ -1848,23 +1848,13 @@ async function createNewUser() {
   status.style.color = 'var(--muted)';
 
   try {
-    // Simpan session admin saat ini
-    const adminEmail = window._currentUser?.email;
-    const adminPass  = document.getElementById('_admin-pass-cache') ? document.getElementById('_admin-pass-cache').value : '';
-
-    // Buat user baru via Firebase Auth
-    const cred = await window._fbCreateUser(email, pass);
-    const uid  = cred.user.uid;
-
-    // Simpan profil ke Firestore users/{uid}
-    await window._fbSetDoc(
-      window._fbDoc(window._db, 'users', uid),
-      { name, email, dept: dept || '-', role, createdAt: new Date().toISOString() }
-    );
+    // Buat user baru via Firestore custom auth (_fbCreateUser sudah handle hash + simpan ke Firestore)
+    const cred = await window._fbCreateUser(email, pass, name, role, dept || '-');
+    const uid  = cred.uid; // _fbCreateUser mengembalikan { uid }
 
     status.textContent = '✅ Akun berhasil dibuat!';
     status.style.color = 'var(--c4)';
-    showToast(`Akun ${name} berhasil dibuat sebagai ${role}`, 'success');
+    showToast(`Akun ${name} berhasil dibuat sebagai ${role} ✅`, 'success');
 
     // Reset form
     document.getElementById('new-user-name').value = '';
@@ -1872,22 +1862,10 @@ async function createNewUser() {
     document.getElementById('new-user-pass').value = '';
     document.getElementById('new-user-dept').value = '';
 
-    // Re-login admin (karena createUser otomatis switch session)
-    // Kita perlu admin login ulang — tampilkan prompt
-    showToast('⚠️ Sesi admin berubah. Silakan login ulang sebagai admin.', 'error');
-    setTimeout(() => {
-      window._fbSignOut().then(() => {
-        pendingPage = '__admin__admin';
-        openLogin();
-      });
-    }, 2000);
-
     // Refresh daftar user
-    loadUserList();
+    setTimeout(() => loadUserList(), 500);
   } catch(e) {
-    let msg = 'Gagal membuat akun: ' + e.message;
-    if (e.code === 'auth/email-already-in-use') msg = '⚠️ Email sudah terdaftar.';
-    if (e.code === 'auth/invalid-email') msg = '⚠️ Format email tidak valid.';
+    let msg = 'Gagal membuat akun: ' + (e.message || JSON.stringify(e));
     status.textContent = msg;
     status.style.color = 'var(--c1)';
   }
@@ -2091,7 +2069,7 @@ function renderCustomNavMenus() {
   const menus = (appData.customMenus || []).filter(m => m.active !== false);
   if (!menus.length) { container.innerHTML = ''; return; }
 
-  const MAX_DIRECT = 1; // tampil langsung max 1, sisanya masuk dropdown "Lainnya"
+  const MAX_DIRECT = 0; // semua menu kustom masuk dropdown "Lainnya"
   const direct  = menus.slice(0, MAX_DIRECT);
   const overflow = menus.slice(MAX_DIRECT);
 
@@ -2347,8 +2325,8 @@ function startRealtimeSync() {
   const params = new URLSearchParams(window.location.search);
   const page = params.get('page');
   if (page) {
-    const publicPages = ['home','policy','pkwt','org','chat','faq'];
-    const loginPages  = ['form'];
+    const publicPages = ['home','policy','org','chat','faq'];
+    const loginPages  = ['form','pkwt'];
     if (publicPages.includes(page)) {
       setTimeout(() => { if(typeof showPage==='function') showPage(page); }, 400);
     } else if (loginPages.includes(page)) {
