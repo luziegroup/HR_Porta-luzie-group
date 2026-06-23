@@ -809,6 +809,10 @@ footer a { color: var(--muted); text-decoration: none; } footer a:hover { color:
             <button class="btn-save" onclick="saveApiKey()"><i class="ti ti-check"></i> Simpan</button>
           </div>
           <div class="api-status" id="api-status"><span class="dot-status dot-no"></span><span>Belum diset — akan pakai Groq sebagai backup</span></div>
+          <div id="file-protocol-warning" style="display:none;margin-top:10px;padding:10px 14px;background:rgba(255,180,0,0.1);border:1px solid rgba(255,180,0,0.35);border-radius:10px;font-size:12px;color:#FFB400;line-height:1.6">
+            ⚠️ <b>Portal dibuka via file:// (langsung dari Windows Explorer)</b><br>
+            Anthropic API tidak bisa diakses dari file://. <b>Gunakan Groq API Key</b> (gratis) sebagai gantinya — atau buka portal via server lokal (Live Server di VS Code, dsb).
+          </div>
         </div>
       </div>
 
@@ -1555,7 +1559,9 @@ function updateGroqStatus() {
 async function askGroq(q, policyContext, sysPrompt) {
   const groqKey = getGroqKey();
   if (!groqKey) throw new Error('no-groq-key');
-  const prompt = sysPrompt || (`Namamu Hara, rekan HRD senior Luzie Group yang ngobrolnya santai tapi akurat. Jawab langsung ke intinya — kalau ada angka per-satuan dan ditanya jumlah berbeda, hitung dulu baru jawab. Jangan karang info yang tidak ada di data.\n\nDATA KEBIJAKAN:\n` + policyContext);
+  // Selalu gunakan sysPrompt yang sudah dibangun (berisi semua konteks: kebijakan + FAQ + PDF)
+  // policyContext hanya sebagai fallback minimal kalau sysPrompt benar-benar tidak diberikan
+  const prompt = sysPrompt; // selalu gunakan sysPrompt yang sudah dibangun lengkap dengan semua konteks
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + groqKey },
@@ -1596,7 +1602,7 @@ function localHaraAnswer(q) {
   }
 
   // ── 2. Terima kasih / penutup singkat ──
-  if (/^(terima kasih|makasih|thanks|thx|oke|sip|noted|beres|mantap)/.test(qLow) && qLow.length < 30) {
+  if (/^(terima kasih|makasih|thanks|thx|ok\b|oke|sip|noted|beres|mantap|siap|iya|yep|yap|👍|🙏)/.test(qLow) && qLow.length < 40) {
     const closings = [
       `Sama-sama! 😊 Kalau ada pertanyaan lain, saya di sini ya.`,
       `Siap${userName ? ', ' + userName : ''}! Kalau ada lagi, langsung tanya aja.`,
@@ -1608,6 +1614,26 @@ function localHaraAnswer(q) {
   // ══════════════════════════════════════════
   // INTENT MAP — setiap intent punya regex ketat + policy key + jawaban default
   // ══════════════════════════════════════════
+
+  // ── 2.3 Opener / pembuka topik ("mau nanya tentang X") — tanya balik spesifiknya ──
+  const openerTopicMap = [
+    { pattern: /perjalanan.?dinas|dinas luar|sppd|tugas luar/, topic: 'perjalanan dinas', reply: 'Boleh, soal dinas mau tanya apa dulu — uang hariannya, cara klaim reimburse, atau prosedur pengajuan SPPD?' },
+    { pattern: /cuti|hari off/, topic: 'cuti', reply: 'Oke, soal cuti — mau tanya jatah tahunan, cara pengajuan, atau jenis cuti tertentu (sakit, melahirkan, dll)?' },
+    { pattern: /lembur|overtime/, topic: 'lembur', reply: 'Soal lembur boleh. Mau tanya cara klaim, batasannya, atau kompensasinya?' },
+    { pattern: /wfh|work from home|kerja dari rumah/, topic: 'WFH', reply: 'WFH — mau tanya aturan harinya, cara izin, atau ketentuannya secara umum?' },
+    { pattern: /gaji|payroll|slip gaji/, topic: 'gaji', reply: 'Soal gaji — mau tanya jadwal transfer, komponen gaji, atau hal lain?' },
+    { pattern: /bpjs|jaminan/, topic: 'BPJS', reply: 'BPJS — mau tanya soal kepesertaan, klaim, atau besaran iurannya?' },
+    { pattern: /pkwt|pkwtt|kontrak/, topic: 'kontrak', reply: 'Soal kontrak — mau tanya bedanya PKWT dan PKWTT, masa percobaan, atau hal lain?' },
+    { pattern: /reimburse|klaim biaya/, topic: 'reimbursement', reply: 'Reimburse — mau tanya cara klaim, batas waktu pengajuan, atau dokumen yang dibutuhkan?' },
+  ];
+  const isOpener = /^(mau nanya|mau tanya|saya mau nanya|saya mau tanya|boleh nanya|boleh tanya|nanya|tanya|ada pertanyaan|ada yang mau ditanyakan|pengen nanya)/.test(qLow);
+  if (isOpener) {
+    for (const { pattern, reply } of openerTopicMap) {
+      if (pattern.test(qLow)) return reply;
+    }
+    // Opener tanpa topik spesifik
+    return 'Boleh, mau tanya soal apa? Cuti, lembur, perjalanan dinas, gaji, WFH, atau hal lain?';
+  }
 
   // ── Teks "tidak tahu" yang jujur — dipakai sebagai fallback ──
   const noInfo = `__NO_DATA__`;
@@ -1639,7 +1665,7 @@ function localHaraAnswer(q) {
   }
 
   // ── 3. Perjalanan dinas ──
-  if (/perjalanan dinas|perjalan dinas|dinas luar|dinas ke|tugas luar|business trip|sppd/.test(qLow)) {
+  if (/perjalanan.?dinas|perjalan.?dinas|dinas luar|dinas ke|tugas luar|business trip|sppd|mau dinas|mau nanya.*dinas|nanya.*dinas|terkait dinas|soal dinas|info dinas/.test(qLow)) {
     return searchAndAnswer({ policyKeys: ['perjalanan dinas','dinas luar','sppd'], faqWords: ['perjalanan','dinas','sppd'], fallback: noInfo }, q);
   }
 
@@ -1753,9 +1779,8 @@ function localHaraAnswer(q) {
   }
 
   // Tidak ditemukan sama sekali
-  const suggestions = [['cuti tahunan','berapa jatah cuti'],['lembur','cara klaim lembur'],['WFH','aturan kerja remote'],['PKWT vs PKWTT','beda jenis kontrak'],['perjalanan dinas','prosedur dinas luar']];
-  const pick = suggestions.sort(() => Math.random() - 0.5).slice(0, 2).map(s => `<b>${s[0]}</b>`).join(' atau ');
-  return `Saya belum punya info spesifik untuk pertanyaan itu. Mungkin bisa coba tanya tentang ${pick}?<br><br>Atau cek langsung di menu <b>Peraturan</b> dan <b>FAQ</b>. Kalau butuh jawaban resmi, tim HRD siap membantu di ext. 101.`;
+  // Kembalikan null agar chatSend bisa coba ke AI atau context-aware fallback
+  return null;
 }
 
 // ── Helper: pencarian FAQ berdasarkan skor ──
@@ -1797,14 +1822,19 @@ function searchAndAnswer({ policyKeys, faqWords, fallback, intro }, q) {
   // Cari FAQ
   const faqHit = scoredFaqSearch(faqWords || []);
   if (faqHit) return (intro ? intro + '<br><br>' : '') + faqHit.a + `<br><br><small style="opacity:.5;font-size:11px">— Dari FAQ HR Luzie Group</small>`;
-  // Cari kebijakan dengan key spesifik
+  // Cari kebijakan: pecah setiap key multi-kata jadi token, cukup sebagian token yang match
   for (const pol of (appData.policies || [])) {
     for (const item of pol.items) {
       const hay = (pol.cat + ' ' + item.title + ' ' + item.points.join(' ')).toLowerCase();
-      if (policyKeys.some(k => hay.includes(k))) {
+      const matched = policyKeys.some(k => {
+        const tokens = k.toLowerCase().split(/\s+/);
+        // Kalau key 1 kata: harus exact match. Kalau multi-kata: cukup semua token ada di hay
+        return tokens.length === 1 ? hay.includes(tokens[0]) : tokens.every(t => hay.includes(t));
+      });
+      if (matched) {
         const poin = item.points.map(p => '• ' + p).join('<br>');
         const sanksi = item.penalty ? '<br><br>⚠️ <b>Catatan:</b> ' + item.penalty : '';
-        return (intro ? intro + '<br><br>' : '') + '<b>' + item.title + '</b><br>' + poin + sanksi + '<br><br>Ada yang mau ditanyakan lebih lanjut?';
+        return (intro ? intro + '<br><br>' : '') + '<b>' + item.title + '</b><br>' + poin + sanksi;
       }
     }
   }
@@ -1833,21 +1863,76 @@ async function chatSend() {
 
   const qLow = q.toLowerCase().trim();
 
+  // ── Debug command untuk admin ──
+  if (qLow === '!pdf' || qLow === '!debug pdf') {
+    const docs = appData.pdfDocs || [];
+    if (!docs.length) {
+      removeTyping(); addChatMsg('bot', '📄 Belum ada PDF yang diupload di Admin → Dokumen PDF.');
+      document.getElementById('chat-send-btn').disabled = false; return;
+    }
+    const info = docs.map(d => {
+      const status = (!d.text || d.text.trim().length < 100) ? '❌ KOSONG/SCAN' : `✅ ${d.text.length.toLocaleString()} karakter`;
+      return `• <b>${esc(d.name)}</b>: ${status}`;
+    }).join('<br>');
+    removeTyping(); addChatMsg('bot', `📊 Status PDF yang diupload:<br><br>${info}<br><br>Kalau status ❌, PDF tersebut berupa scan/gambar dan tidak bisa dibaca HARA. Ganti dengan PDF yang teksnya bisa diseleksi.`);
+    document.getElementById('chat-send-btn').disabled = false; return;
+  }
+  const isSocialMsg = /^(halo|hai|hi|hei|hey|selamat|pagi|siang|sore|malam|assalamu|permisi|terima kasih|makasih|thanks|thx|ok|oke|sip|noted|beres|mantap|siap|iya|yep|yap|👍|🙏)/.test(qLow) && qLow.length < 40;
+  if (isSocialMsg) {
+    const socialAns = localHaraAnswer(q);
+    if (socialAns && !socialAns.startsWith('__')) {
+      _chatHistory.push({ role: 'user', content: q });
+      _chatHistory.push({ role: 'assistant', content: socialAns.replace(/<[^>]+>/g,'') });
+      if (_chatHistory.length > 20) _chatHistory = _chatHistory.slice(-20);
+      removeTyping();
+      addChatMsg('bot', socialAns);
+      document.getElementById('chat-send-btn').disabled = false;
+      return;
+    }
+  }
+
   // ── Deteksi pertanyaan follow-up / referensial ──
   // Hanya dianggap follow-up kalau ada kata referensial yang jelas merujuk konteks sebelumnya.
-  // Panjang kalimat TIDAK digunakan sebagai kondisi — kalimat pendek bisa saja pertanyaan baru.
-  const hasReferentialWord = /\b(itu|tadi|tersebut|peraturannya|kebijakannya|maksudnya|gimana kalau|bagaimana jika|terus kalau|lalu bagaimana|ada sk|ada peraturan|ada kebijakan|surat keputusan|\bsk\b|yang tadi|yang itu|hal tersebut|soal itu|soal tadi|tentang itu|tentang tadi|lebih lanjut|lebih detail|bisa dijelaskan|tolong jelaskan|apakah ada|adakah|dan bagaimana|lalu apa|terus apa|selanjutnya|kalau begitu|berarti|jadi kalau|lanjut|oh iya)\b/.test(qLow);
-  // Pertanyaan sangat pendek (< 20 karakter) tanpa kata kunci topik baru bisa dianggap follow-up
-  const isVeryShortAmbiguous = _chatHistory.length >= 2 && qLow.length < 20 && !/perjalanan|cuti|lembur|wfh|gaji|thr|bpjs|pkwt|resign|absen|dress|reimburse|izin/.test(qLow);
+  const hasReferentialWord = /\b(itu|tadi|tersebut|peraturannya|kebijakannya|prosedurnya|caranya|ketentuannya|syaratnya|maksudnya|detailnya|infonya|jelasnya|gimana kalau|bagaimana jika|terus kalau|lalu bagaimana|ada sk|ada peraturan|ada kebijakan|surat keputusan|\bsk\b|yang tadi|yang itu|hal tersebut|soal itu|soal tadi|tentang itu|tentang tadi|lebih lanjut|lebih detail|bisa dijelaskan|tolong jelaskan|apakah ada|adakah|dan bagaimana|lalu apa|terus apa|selanjutnya|kalau begitu|berarti|jadi kalau|lanjut|oh iya|terus gimana|trus gimana|gimana prosedur|cara pengajuan|cara klaim|langkah|step|tahapan)\b/.test(qLow);
+  // isVeryShortAmbiguous hanya untuk pertanyaan yang benar-benar ambigu (bukan penutup sosial yang sudah ditangani di atas)
+  const isVeryShortAmbiguous = _chatHistory.length >= 2 && qLow.length < 15 && !/perjalanan|cuti|lembur|wfh|gaji|thr|bpjs|pkwt|resign|absen|dress|reimburse|izin/.test(qLow);
   const isFollowUp = _chatHistory.length >= 2 && (hasReferentialWord || isVeryShortAmbiguous);
+
+  const allPdfContext = getPdfContext(); // selalu ambil semua PDF
+  // Debug: log berapa karakter context yang dikirim ke AI
+  console.log(`[HARA Context] Policy: ${policyContext.length}c | FAQ: ${faqContext.length}c | PDF: ${allPdfContext.length}c | PDF docs: ${(appData.pdfDocs||[]).length} file`);
+
+  // ── Deteksi file:// — API Anthropic tidak bisa dipanggil, skip langsung ke Groq ──
+  const isFileProtocol = window.location.protocol === 'file:';
+  if (isFileProtocol && apiKey && apiKey.startsWith('sk-ant-')) {
+    console.warn('[HARA] file:// protocol terdeteksi — Anthropic API tidak bisa diakses. Gunakan Groq atau buka via server lokal.');
+  }
 
   // ── LANGKAH 1: Cek PDF hit & localCheck dulu (skip kalau follow-up) ──
   const localCheck = isFollowUp ? null : localHaraAnswer(q);
 
+  // ── LANGKAH 1.5: Kalau tidak ada PDF hit eksplisit, cek apakah ada PDF yang relevan manual ──
+  // Ini menangkap kasus di mana threshold PDF hit terlalu ketat tapi dokumen sebenarnya ada
+  let extraPdfContext = '';
+  if (allPdfContext && (!localCheck || !localCheck.startsWith('__PDF_HIT__'))) {
+    // Cari kata bermakna dari pertanyaan
+    const stopW = new Set(['saya','anda','mau','tanya','tentang','yang','ada','dan','atau','ini','itu','di','ke','dari','untuk','dengan','bisa','tidak','apakah','bagaimana','berapa','apa','gimana','boleh','ingin','sudah','baru','jika','kalau','akan','karena','jadi','dong','ya','nya','lah','sih','gimana','tolong','jelaskan','soal','atas']);
+    const qKeywords = qLow.split(/\s+/).filter(w => w.length > 3 && !stopW.has(w));
+    const pdfDocsValid = (appData.pdfDocs || []).filter(d => d.text && d.text.trim().length > 100);
+    const relevantDocs = pdfDocsValid.filter(d => {
+      const dLow = d.text.toLowerCase();
+      return qKeywords.filter(w => dLow.includes(w)).length >= 1; // minimal 1 kata cocok
+    });
+    if (relevantDocs.length) {
+      extraPdfContext = relevantDocs.map(d => `=== DOKUMEN: ${d.name} ===\n${d.text}`).join('\n\n');
+      console.log(`[HARA] Extra PDF context: ${relevantDocs.length} dokumen relevan ditemukan untuk query "${q}"`);
+    }
+  }
+
   // ── Bangun localHint sebagai anchor untuk AI (mencegah halusinasi) ──
   const isNoData = localCheck === null || (typeof localCheck === 'string' && (localCheck.startsWith('__NO_DATA__') || localCheck.includes('belum punya info')));
   const localHint = (!isNoData && localCheck && !localCheck.startsWith('__PDF_HIT__') && !localCheck.startsWith('__NO_DATA__'))
-    ? `\n\n## RINGKASAN JAWABAN DATABASE LOKAL\nBerikut adalah jawaban yang sudah ditemukan dari database lokal — gunakan ini sebagai acuan utama, jangan abaikan:\n${localCheck.replace(/<[^>]+>/g,'')}`
+    ? `\n\n## REFERENSI TAMBAHAN (dari pencarian lokal)\nIni adalah poin-poin yang ditemukan dari database lokal — gunakan sebagai referensi, tapi tetap susun jawaban dengan bahasamu sendiri yang natural dan manusiawi:\n${localCheck.replace(/<[^>]+>/g,'')}`
     : '';
 
   // ── Bangun kalkulasi hint — inject nilai satuan agar AI bisa hitung ──
@@ -1878,74 +1963,92 @@ async function chatSend() {
     }
   }
 
-  const sysPrompt = `Namamu Hara. Kamu bukan asisten virtual generik — kamu seperti rekan kerja HRD senior yang paling enak diajak ngobrol. Orang datang ke kamu bukan karena kamu formal, tapi karena kamu jelas, jujur, dan manusiawi.
-${userName ? `\nKamu sedang ngobrol dengan ${userName}. Sesekali sebut namanya biar terasa personal — tapi jangan tiap kalimat, itu malah aneh.` : ''}
+  // ── Gabungkan semua sumber data ke satu konteks lengkap ──
+  // sysPrompt sudah pakai allPdfContext dari atas
 
-Cara kamu ngobrol: santai tapi akurat. Kayak ngobrol di pantry kantor, bukan baca peraturan perusahaan. Langsung ke intinya — tidak ada "Tentu saja! Pertanyaan yang sangat bagus!" karena itu buang waktu. Jangan pernah sebut diri kamu AI atau robot kecuali ditanya langsung.
+  const sysPrompt = `Kamu adalah HARA — HR Assistant Luzie Group. Bukan chatbot, bukan robot. Kamu seperti kakak senior di HRD yang udah lama di sini, tahu semua aturan, dan enak diajak ngobrol. Kalau ada yang tanya, kamu jawab kayak ngobrol biasa — langsung, jelas, manusiawi.
+${userName ? `Kamu lagi ngobrol sama ${userName}. Sesekali sebut namanya kalau terasa natural — jangan dipaksain.` : ''}
 
----
+═══ CARA NGOBROL ═══
 
-YANG PALING PENTING — KALKULASI:
-Kalau data menyebut nilai per-satuan (per hari, per km, per unit), kamu WAJIB hitung sendiri kalau ditanya jumlah berbeda. Jangan jawab panjang lebar tanpa angka.
+Jadilah seperti teman HRD yang dihubungi via chat. Bukan membacakan peraturan, tapi menjelaskan. Bedanya:
 
-Cara yang benar:
-- Tanya: "Kalau dinas 4 hari dapat berapa?"
-- Jawab: "4 hari × Rp[X] = Rp[hasil]. Itu udah termasuk [komponen], tapi [komponen lain] tetap ditagih terpisah."
+❌ Kaku: "Berdasarkan kebijakan perusahaan pasal 3 ayat 2, karyawan berhak atas cuti tahunan sebanyak 12 hari kerja per tahun."
+✅ Natural: "Jatah cuti tahunan 12 hari. Kalau mau ambil, ajukan lewat portal ya minimal 3 hari sebelumnya."
 
-Cara yang salah (JANGAN LAKUKAN):
-- "Berdasarkan kebijakan perusahaan, uang harian perjalanan dinas adalah Rp[X] per hari sesuai ketentuan yang berlaku."
-Jawaban seperti ini tidak membantu karena tidak menjawab pertanyaan yang sebenarnya ditanyakan.
+❌ Kaku: "Perjalanan dinas harian mendapatkan uang saku sebesar Rp X per hari sesuai ketentuan yang berlaku."
+✅ Natural: "Dinas 3 hari? Berarti dapat 3 × RpX = RpY buat uang harian. Tiket dan hotel tetap diklaim terpisah pakai bukti."
 
----
+Aturan ngobrol:
+- Tidak ada "Tentu!", "Baik sekali!", "Pertanyaan yang bagus!" — itu basa-basi kosong
+- Tidak ada "Berdasarkan kebijakan..." atau "Sesuai peraturan yang berlaku..." — langsung ke isinya
+- Boleh pakai "ya", "nih", "tuh", "lho" secukupnya — tapi jangan lebay
+- Kalau pertanyaannya nyambung ke konteks sebelumnya, jawab nyambung juga — jangan mulai dari nol
+- Satu pertanyaan = satu jawaban yang fokus. Jangan dump semua informasi sekaligus
 
-NALAR KONTEKS:
-Kalau ada pertanyaan "bagaimana kalau...", "boleh nggak...", atau skenario gabungan — nalar dulu dari kebijakan yang ada, baru jawab. Jangan lempar balik ke karyawan tanpa berusaha menjawab.
+═══ KALKULASI (WAJIB) ═══
 
-Kalau situasinya benar-benar tidak ada di data: "Untuk yang ini aku belum punya info pastinya — lebih aman konfirmasi langsung ke HRD ya."
+Kalau data punya nilai per-satuan (Rp/hari, Rp/km, Rp/jam), dan ditanya jumlah tertentu — HITUNG sendiri, tampilkan hasilnya.
 
----
+Format: "[jumlah] × Rp[nilai] = Rp[total]"
+Lanjut dengan: komponen apa saja yang sudah termasuk, dan apa yang diklaim terpisah.
 
-EMPATI DULU, PROSEDUR KEMUDIAN:
-Kalau karyawan cerita mau resign, lagi stres, atau ada masalah dengan atasan — dengarkan dulu, acknowledge dulu. Baru kalau mereka minta info prosedur, kasih. Jangan langsung buka "daftar langkah resign".
+Jangan pernah jawab hanya dengan "nilai per harinya Rp X" lalu berhenti — itu tidak menjawab pertanyaan.
 
----
+═══ TOPIK YANG BELUM ADA DI DATA ═══
 
-TANYA BALIK KALAU AMBIGU:
-Kalau pertanyaannya kurang jelas, tanya balik — tapi cukup 1 hal yang paling penting. Jangan lempar 3 pertanyaan sekaligus.
-Contoh: "Dinasnya dalam kota atau luar kota?" — simpel, langsung ke inti.
+Kalau topiknya tidak ada di database, jangan pura-pura tahu. Tapi jangan juga langsung menyerah. Coba dulu:
+1. Apakah ada info terkait yang bisa membantu?
+2. Kalau benar-benar tidak ada: "Soal itu aku belum punya infonya di sini — langsung tanya ke HRD lebih aman ya."
 
----
+Jangan sebut "database", "sistem", "API", atau hal teknis apapun ke karyawan.
 
-CONTOH DIALOG (pelajari nadanya):
+═══ SITUASI KHUSUS ═══
 
-Karyawan: "Kalau dinas 5 hari dapat berapa?"
-Hara: "5 hari × Rp[X] = Rp[hasil]. Itu uang harian ya — tiket dan hotel tetap reimburse terpisah pakai bukti. Udah ada jadwal berangkatnya?"
+Karyawan mau resign / stres / ada konflik:
+→ Dengarkan dulu. "Wah, kedengarannya berat." Baru tanya apakah butuh info prosedur.
 
-Karyawan: "Cuti sakit harus pakai surat dokter?"
-Hara: "1–2 hari biasanya tidak perlu. Lebih dari itu, surat dokter diperlukan. Lagi tidak enak badan sekarang?"
+Pertanyaan ambigu / kurang jelas:
+→ Tanya balik 1 hal paling penting. Bukan 3 pertanyaan sekaligus.
+→ Contoh: "Dinasnya dalam kota atau luar kota?" — cukup itu dulu.
 
-Karyawan: "Kayaknya mau resign deh, udah nggak kuat."
-Hara: "Wah, kedengarannya berat banget. Mau cerita situasinya? Mungkin ada yang bisa dibantu dulu sebelum sampai ke keputusan itu."
+Pertanyaan follow-up / "prosedurnya?", "caranya?", "ketentuannya?":
+→ Jawab berdasarkan topik yang sedang dibahas sebelumnya. Jangan tanya ulang konteksnya.
 
-Karyawan: "Bonus kapan cair?"
-Hara: "Untuk jadwal pencairan bonus, aku tidak punya info pastinya di sini. Langsung tanya ke Finance atau HRD ya — mereka yang pegang jadwalnya."
+═══ CONTOH NYATA ═══
 
----
+User: "saya mau nanya soal perjalanan dinas"
+HARA: "Boleh, mau tanya soal apa dulu — uang hariannya, cara klaim, atau persiapan sebelum berangkat?"
 
-ANTI-HALUSINASI (tidak boleh dilanggar):
-- Jawab hanya dari data kebijakan di bawah. Jangan karang angka, prosedur, atau nama yang tidak ada.
-- Kalau ada Ringkasan Database Lokal, jadikan itu acuan utama — itu data yang sudah diverifikasi.
-- Lebih baik jujur tidak tahu daripada jawab salah.
+User: "kalau dinas 5 hari dapat berapa?"
+HARA: "5 hari × Rp[X] = Rp[Y] buat uang harian. Tiket dan akomodasi diklaim terpisah pakai bukti. Udah ada SPT-nya?"
 
----
+User: "cuti sakit perlu surat dokter?"
+HARA: "1–2 hari biasanya tidak perlu. Lebih dari itu, lampirin surat dokter waktu lapor ya. Lagi sakit sekarang?"
 
-DATA KEBIJAKAN PERUSAHAAN:
+User: "kayaknya mau resign deh"
+HARA: "Wah, ada apa? Mau cerita dulu? Kalau ada yang bisa diselesaikan sebelum sampai sana, mungkin masih bisa dicari jalan keluarnya."
 
-## KEBIJAKAN
+User: "prosedurnya gimana?"
+HARA: [jawab prosedur dari topik yang dibahas sebelumnya, jangan tanya "prosedur apa?"]
+
+═══ PRIORITAS DATA ═══
+
+Kalau ada konflik antar sumber, ikuti urutan ini:
+1. Dokumen Resmi (PDF/SK yang diupload) — paling otoritatif
+2. Kebijakan — data yang dikurasi admin
+3. FAQ — jawaban umum dari HRD
+
+Jangan sebut sumber atau nama file ke user. Langsung jawab isinya.
+Jangan karang angka atau prosedur yang tidak ada di data. Kalau tidak ada, bilang tidak tahu.
+
+═══ DATA PERUSAHAAN ═══
+
+## KEBIJAKAN HR
 ${policyContext}
 
 ## FAQ
-${faqContext}${pdfContext ? `\n\n## DOKUMEN RESMI (SK & Peraturan yang sudah diupload)\n${pdfContext}` : ''}${localHint}${kalkulasiHint}`;
+${faqContext}${allPdfContext ? `\n\n## DOKUMEN RESMI (SK, Memo & Peraturan — PRIORITAS UTAMA)\n${allPdfContext}` : ''}${localHint}${kalkulasiHint}`;
 
   let ans = null;
 
@@ -1954,24 +2057,34 @@ ${faqContext}${pdfContext ? `\n\n## DOKUMEN RESMI (SK & Peraturan yang sudah diu
     const pdfHits = JSON.parse(localCheck.slice(11));
     const docContext = pdfHits.map(h => `=== DOKUMEN: ${h.name} ===\n${h.fullText}`).join('\n\n');
 
-    const pdfSysPrompt = `Namamu Hara — rekan HRD senior yang ngobrolnya enak, bukan robot pembaca dokumen.
-${userName ? `Kamu lagi ngobrol dengan ${userName}.` : ''}
+    const pdfSysPrompt = `Kamu adalah HARA — HR Assistant Luzie Group. Seperti kakak senior di HRD yang enak diajak ngobrol dan tahu semua aturan.
+${userName ? `Kamu lagi ngobrol sama ${userName}.` : ''}
 
-Kamu baru saja diberi dokumen kebijakan perusahaan. Tugasmu bukan membacakan ulang isinya — tapi menjelaskannya dengan bahasa yang mudah dicerna, seperti teman kerja yang menjelaskan aturan sambil ngobrol santai.
+Kamu punya dokumen resmi, kebijakan, dan FAQ perusahaan. Tugasmu bukan membacanya ulang — tapi menjelaskan dengan bahasa manusia, kayak teman kerja yang lagi ngobrol santai.
 
-Yang wajib kamu lakukan:
-- Kalau ada angka per-satuan (Rp/hari, Rp/km, dll) dan ditanya jumlah berbeda → HITUNG dulu, baru jawab. Tunjukkan rumusnya singkat: "3 hari × Rp[X] = Rp[hasil]"
-- Jawab langsung ke intinya. Tidak ada "Berdasarkan dokumen yang diberikan..." — itu tidak perlu
-- Kalau ada langkah prosedur, tampilkan dengan nomor yang jelas
-- Kalau pertanyaannya kurang jelas, tanya balik 1 hal paling penting saja
+Yang wajib dilakukan:
+- Kalau ada nilai per-satuan (Rp/hari, Rp/km): HITUNG sendiri kalau ditanya jumlah tertentu. Format: "N × RpX = RpY"
+- Jawab langsung ke inti. Tidak ada "Berdasarkan dokumen..." atau "Sesuai peraturan yang berlaku..."
+- Kalau ada langkah prosedur, pakai nomor yang jelas
+- Kalau dokumen + kebijakan sama-sama relevan: gabungkan jadi satu jawaban utuh
+- Kalau ambigu: tanya balik 1 hal paling penting saja
 
 Yang tidak boleh dilakukan:
-- Jangan suruh user "buka dokumen sendiri" — kamu yang jelaskan
-- Jangan mulai dengan "Tentu!", "Baik sekali!", atau basa-basi kosong
-- Jangan karang info yang tidak ada di dokumen. Kalau dokumen tidak menjawab: "Untuk ini dokumen tidak menyebut detailnya — konfirmasi ke HRD ya."
+- Jangan sebut nama file, dokumen, atau sumber data ke user
+- Jangan mulai dengan "Tentu!", "Baik!", atau basa-basi kosong  
+- Jangan karang info yang tidak ada di data
+- Kalau tidak ada datanya: "Soal itu aku belum punya infonya di sini — langsung ke HRD lebih aman ya."
 
-DOKUMEN RESMI PERUSAHAAN:
-${docContext}`;
+PRIORITAS SUMBER: Dokumen Resmi > Kebijakan > FAQ
+
+## DOKUMEN RESMI PERUSAHAAN (PRIORITAS UTAMA):
+${docContext}
+
+## KEBIJAKAN PERUSAHAAN:
+${policyContext}
+
+## FAQ:
+${faqContext}`;
 
     if (apiKey && apiKey.startsWith('sk-ant-')) {
       try {
@@ -2003,33 +2116,31 @@ ${docContext}`;
     return;
   }
 
-  // ── Coba Anthropic dengan history + context + localHint ──
+  // ── Coba Anthropic (termasuk dari file://, pakai dangerous-direct-browser-access) ──
   if (apiKey && apiKey.startsWith('sk-ant-')) {
     try {
-      // Susun messages dengan history (max 10 turn terakhir)
       const historyMessages = _chatHistory.slice(-10);
       const messages = [...historyMessages, { role: 'user', content: q }];
-
       const res = await fetch("https://api.anthropic.com/v1/messages",{
         method:"POST",
         headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-        body: JSON.stringify({
-          model:"claude-haiku-4-5-20251001", max_tokens:800,
-          system: sysPrompt,
-          messages: messages
-        })
+        body: JSON.stringify({ model:"claude-haiku-4-5-20251001", max_tokens:800, system: sysPrompt, messages })
       });
       const data = await res.json();
       if (data.content?.[0]?.text && !data.error) ans = data.content[0].text;
-    } catch(e) { console.warn('Anthropic error, fallback ke Groq:', e); }
+      else if (data.error) console.warn('Anthropic API error:', data.error);
+    } catch(e) { console.warn('Anthropic fetch error (mungkin CORS dari file://):', e.message); }
   }
 
-  // Fallback ke Groq
+  // ── Fallback ke Groq (bisa dipakai dari file:// juga) ──
   if (!ans && groqKey) {
     try {
-      // Groq: kirim history sebagai bagian messages
       const historyMessages = _chatHistory.slice(-10);
       const groqKey_ = getGroqKey();
+      // Kalau ada PDF relevan yang belum masuk sysPrompt, inject sekarang
+      const groqSys = extraPdfContext
+        ? sysPrompt + `\n\n## DOKUMEN TAMBAHAN RELEVAN:\n${extraPdfContext}`
+        : sysPrompt;
       const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": "Bearer " + groqKey_ },
@@ -2037,7 +2148,7 @@ ${docContext}`;
           model: "llama-3.3-70b-versatile",
           max_tokens: 800,
           messages: [
-            { role: "system", content: sysPrompt },
+            { role: "system", content: groqSys },
             ...historyMessages,
             { role: "user", content: q }
           ]
@@ -2049,24 +2160,42 @@ ${docContext}`;
     } catch(e) { console.warn('Groq error:', e); }
   }
 
-  // Fallback lokal — hanya pakai kalau localCheck benar-benar punya data
+  // ── Fallback: jawab dari PDF tanpa API (kalau ada PDF relevan) ──
+  if (!ans && extraPdfContext) {
+    ans = synthesizePdfAnswerFromText(q, extraPdfContext);
+  }
+
+  // Fallback lokal — coba dari localCheck, lalu dari konteks history, baru menyerah
   if (!ans) {
     const hasLocalData = localCheck && !localCheck.startsWith('__NO_DATA__') && !localCheck.startsWith('__PDF_HIT__');
-    if (hasLocalData) {
-      ans = localCheck;
-      const botMsg = ans + (!apiKey && !groqKey ? '<br><br><small style="opacity:.5;font-size:11px">💡 Jawaban dari database lokal. Set API key di Admin → API Key untuk jawaban AI yang lebih cerdas.</small>' : '');
-      // Simpan ke history dulu baru tampilkan
+
+    // ── Kalau follow-up tanpa API key: coba jawab dari konteks history percakapan ──
+    let contextAns = null;
+    if (!hasLocalData && isFollowUp && _chatHistory.length >= 2) {
+      const lastBotMsg = [..._chatHistory].reverse().find(m => m.role === 'assistant')?.content || '';
+      const stopW = new Set(['saya','anda','untuk','dengan','dalam','tidak','yang','akan','atau','juga','bisa','pada','dari','sudah','kalau','memproses','tanyakan','langsung','silakan','coba','baru']);
+      const contextWords = lastBotMsg.toLowerCase().split(/\s+/).filter(w => w.length > 4 && !stopW.has(w)).slice(0, 8);
+      if (contextWords.length > 0) {
+        const combinedQ = q + ' ' + contextWords.join(' ');
+        const tryAns = localHaraAnswer(combinedQ);
+        if (tryAns && !tryAns.startsWith('__') && !tryAns.includes('belum punya info')) {
+          contextAns = tryAns;
+        }
+      }
+    }
+
+    const finalLocalAns = hasLocalData ? localCheck : contextAns;
+
+    if (finalLocalAns) {
+      const botMsg = finalLocalAns + (!apiKey && !groqKey ? '<br><br><small style="opacity:.5;font-size:11px">💡 Jawaban dari database lokal. Set API key di Admin → API Key untuk jawaban AI yang lebih lengkap.</small>' : '');
       _chatHistory.push({ role: 'user', content: q });
-      _chatHistory.push({ role: 'assistant', content: ans.replace(/<[^>]+>/g,'') });
+      _chatHistory.push({ role: 'assistant', content: finalLocalAns.replace(/<[^>]+>/g,'') });
       if (_chatHistory.length > 20) _chatHistory = _chatHistory.slice(-20);
       removeTyping();
       addChatMsg('bot', botMsg);
     } else {
-      // Tidak ada data sama sekali — jujur bilang tidak tahu
-      const noDataMsg = isFollowUp
-        ? 'Untuk pertanyaan lanjutan ini, saya butuh API key aktif agar bisa memahami konteks percakapan sebelumnya. Coba tanyakan langsung ke HRD ya 🙏<br><br><small style="opacity:.5;font-size:11px">💡 Set API key di Admin → API Key agar HARA bisa menjawab pertanyaan lanjutan.</small>'
-        : 'Saya belum punya info resmi soal itu di database perusahaan. Untuk jawaban yang akurat, coba tanyakan langsung ke HRD ya 🙏<br><br><small style="opacity:.5;font-size:11px">💡 Set API key di Admin → API Key agar HARA bisa menjawab lebih luas.</small>';
-      // Tetap simpan pertanyaan ke history (agar AI tahu konteks di pesan berikutnya)
+      // Tidak ada data sama sekali — jujur bilang tidak tahu, tanpa terlalu banyak sebut API key ke user biasa
+      const noDataMsg = 'Saya belum punya info spesifik untuk itu di database perusahaan. Coba tanyakan langsung ke tim HRD ya 🙏';
       _chatHistory.push({ role: 'user', content: q });
       _chatHistory.push({ role: 'assistant', content: 'Maaf, saya belum punya info soal itu. Silakan tanya langsung ke HRD.' });
       if (_chatHistory.length > 20) _chatHistory = _chatHistory.slice(-20);
@@ -2090,42 +2219,97 @@ ${docContext}`;
 // Reset history saat ganti page / logout
 function resetChatHistory() { _chatHistory = []; }
 
-// ── Synthesize jawaban PDF tanpa API — natural, bukan raw dump ──
-function synthesizePdfAnswer(q, hits) {
+// ── Synthesize jawaban dari raw PDF text tanpa API ──
+function synthesizePdfAnswerFromText(q, rawPdfText) {
   const qLow = q.toLowerCase();
 
-  // Coba ekstrak struktur dari teks: cari kalimat yang mengandung kata kerja prosedur
-  const procedureWords = ['harus','wajib','perlu','langkah','prosedur','tahap','cara','ajukan','submit','minta','dapatkan','disetujui','sebelum','setelah','dengan'];
+  // ── Sinonim/ekspansi kata kunci ──
+  const synonymMap = {
+    'penginapan': ['hotel','akomodasi','menginap','penginapan','kamar','inap'],
+    'hotel': ['hotel','akomodasi','menginap','penginapan','kamar'],
+    'transport': ['transport','kendaraan','tiket','pesawat','kereta','taksi','perjalanan','bensin','bbm'],
+    'uang harian': ['uang harian','per diem','uang saku','harian','living allowance'],
+    'biaya': ['biaya','reimburse','ganti rugi','klaim','dibayar','ditanggung','anggaran'],
+    'prosedur': ['prosedur','langkah','cara','tahap','tata cara','alur'],
+    'fasilitas': ['fasilitas','hak','dapat','diterima','disediakan','ditanggung','diberikan'],
+    'dapat': ['dapat','berhak','diberikan','disediakan','mendapatkan','memperoleh','fasilitas'],
+    'syarat': ['syarat','ketentuan','persyaratan','wajib','harus'],
+    'luar kota': ['luar kota','antar kota','luar daerah','perjalanan dinas'],
+    'dalam kota': ['dalam kota','lokal'],
+    'persetujuan': ['persetujuan','approval','disetujui','acc','izin atasan'],
+  };
 
-  const allSentences = [];
-  for (const h of hits) {
-    const sents = h.fullText.split(/(?<=[.!?])\s+|\n/).filter(s => s.trim().length > 20 && s.trim().length < 300);
-    allSentences.push(...sents.map(s => s.trim()));
+  // Ekspansi kata kunci dari pertanyaan
+  const stopW = new Set(['saya','anda','mau','tanya','tentang','yang','ada','dan','atau','ini','itu','di','ke','dari','untuk','dengan','bisa','tidak','apakah','bagaimana','berapa','apa','gimana','boleh','ingin','sudah','baru','jika','kalau','akan','karena','jadi','dong','ya','nya','lah','jika','apakah']);
+  const qWords = qLow.split(/\s+/).filter(w => w.length > 2 && !stopW.has(w));
+  const expandedWords = new Set(qWords);
+  for (const [key, syns] of Object.entries(synonymMap)) {
+    if (qWords.some(w => key.includes(w) || w.includes(key) || syns.some(s => s.includes(w)))) {
+      syns.forEach(s => s.split(' ').forEach(sw => expandedWords.add(sw)));
+    }
   }
+  const allSearchWords = [...expandedWords].filter(w => w.length > 2);
 
-  // Skor tiap kalimat: relevan ke pertanyaan + mengandung kata prosedur
-  const qWords = qLow.split(/\s+/).filter(w => w.length > 3);
-  const scored = allSentences.map(s => {
+  // Pecah teks jadi kalimat, filter kalimat header/formal yang tidak informatif
+  const formalSkipPattern = /^(menimbang|mengingat|memutuskan|menetapkan|ditetapkan|pertama|kedua|ketiga|keempat|kelima|keenam|ketujuh|kedelapan|kesembilan|kesepuluh|diktum|pasal \d|ayat \d|bab \d)/i;
+  const sentences = rawPdfText
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map(s => s.trim())
+    .filter(s => {
+      if (s.length < 20 || s.length > 500) return false;
+      if (formalSkipPattern.test(s)) return false; // skip header SK formal
+      if (/^={3,}|^---/.test(s)) return false;
+      return true;
+    });
+
+  // Skor tiap kalimat
+  const scored = sentences.map(s => {
     const sLow = s.toLowerCase();
     let score = 0;
-    qWords.forEach(w => { if (sLow.includes(w)) score += 2; });
-    procedureWords.forEach(w => { if (sLow.includes(w)) score += 1; });
+    allSearchWords.forEach(w => { if (sLow.includes(w)) score += 3; });
+    // Bonus kalimat yang berisi nilai/angka konkret
+    if (/rp[\s\d.,]+|[\d]+\s*(hari|jam|menit|bulan|%|persen|km|malam)/i.test(s)) score += 3;
+    // Bonus kalimat yang berisi kata informatif
+    if (/berhak|mendapatkan|disediakan|ditanggung|dapat|diberikan|maksimal|minimal|sesuai|sebesar/i.test(s)) score += 2;
+    // Penalti kalimat yang isinya hanya tanggung jawab departemen
+    if (/bertanggung jawab|departemen|sosialisasi|pembaruan|melakukan pembaruan/i.test(s)) score -= 2;
     return { s, score };
-  }).filter(x => x.score >= 2).sort((a,b) => b.score - a.score);
+  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
 
-  const topSents = scored.slice(0, 6).map(x => x.s);
+  const top = scored.slice(0, 6).map(x => x.s);
 
-  if (topSents.length === 0) {
-    return `Saya menemukan dokumen terkait tapi butuh sedikit bantuan untuk menjelaskannya secara detail. Bisa coba aktifkan API key di Admin → API Key agar saya bisa menjelaskan isinya dengan lebih baik, atau cek langsung dokumen di menu yang tersedia ya.`;
+  if (top.length === 0) {
+    // Tidak ada kalimat relevan — coba cari bagian teks yang mengandung kata kunci apapun
+    const anyMatch = sentences.find(s => allSearchWords.some(w => s.toLowerCase().includes(w)));
+    if (!anyMatch) {
+      return `Saya sudah baca dokumen yang ada, tapi tidak menemukan info spesifik soal <b>${esc(qWords.join(' '))}</b> di sana.<br><br>Kemungkinan info ini belum tercantum di kebijakan yang diupload — langsung tanya ke HRD untuk konfirmasi ya.`;
+    }
+    return `Dari dokumen yang ada, ini yang paling mendekati pertanyaanmu:<br><br>• ${esc(anyMatch)}<br><br>Untuk detail lebih lanjut, langsung konfirmasi ke HRD ya.`;
   }
 
-  // Format jadi paragraf natural
-  const docName = hits[0].name.replace(/\.pdf$|\.docx$/i,'');
-  const intro = `Soal itu, ada ketentuannya di <b>${esc(docName)}</b>. Ini yang perlu kamu tahu:`;
-  const body = topSents.map((s, i) => `${i+1}. ${esc(s)}`).join('<br>');
-  const outro = `<br><br>Kalau ada bagian yang masih kurang jelas, tanyakan lagi ya — atau aktifkan API key untuk penjelasan yang lebih lengkap.`;
+  // Pisahkan kalimat berisi angka/nilai vs kalimat prosedur
+  const valueLines = top.filter(s => /rp[\s\d.,]+|[\d]+\s*(hari|jam|menit|bulan|%|malam|km)/i.test(s));
+  const infoLines  = top.filter(s => !valueLines.includes(s));
 
-  return `${intro}<br><br>${body}${outro}`;
+  let body = '';
+  if (infoLines.length) {
+    body += infoLines.map((s, i) => `${i + 1}. ${esc(s)}`).join('<br>');
+  }
+  if (valueLines.length) {
+    body += (body ? '<br><br>💰 <b>Nilai/ketentuan:</b><br>' : '💰 <b>Ketentuan:</b><br>');
+    body += valueLines.map(s => `• ${esc(s)}`).join('<br>');
+  }
+
+  const hasGroqOrApi = !!(getApiKey() || getGroqKey());
+  const hint = hasGroqOrApi ? '' : `<br><br><small style="opacity:.45;font-size:11px">💡 Set Groq API key di Admin → API Key untuk penjelasan yang lebih natural.</small>`;
+
+  return `Dari dokumen perusahaan yang saya baca:<br><br>${body}${hint}`;
+}
+
+// ── synthesizePdfAnswer: wrapper dari hits array → pakai fungsi utama ──
+function synthesizePdfAnswer(q, hits) {
+  const combined = hits.map(h => h.fullText || h.excerpt || '').join('\n\n');
+  return synthesizePdfAnswerFromText(q, combined);
 }
 
 // ══════════════════════════════════════════
@@ -2152,6 +2336,10 @@ function switchAdmin(tab) {
   document.getElementById('as-'+tab).classList.add('active');
   if (tab === 'users') loadUserList();
   if (tab === 'sharelink') renderShareLinks();
+  if (tab === 'api' && window.location.protocol === 'file:') {
+    const warn = document.getElementById('file-protocol-warning');
+    if (warn) warn.style.display = 'block';
+  }
 }
 
 function renderAdmin() {
@@ -2369,6 +2557,11 @@ function updateApiStatus(key) {
 }
 function saveApiKey() {
   const k = document.getElementById('api-key-input').value.trim();
+  // Tampilkan warning kalau file://
+  if (window.location.protocol === 'file:') {
+    const warn = document.getElementById('file-protocol-warning');
+    if (warn) warn.style.display = 'block';
+  }
   saveApiKeyStore(k);
   updateApiStatus(k);
   showToast('API Key tersimpan','success');
@@ -2603,7 +2796,13 @@ async function parsePdfFile(file) {
     if (bar) bar.style.width = pct + '%';
     if (stat) stat.textContent = `Membaca halaman ${i} dari ${total}...`;
   }
-  return fullText.trim();
+  const result = fullText.trim();
+  // Debug: log hasil parsing
+  console.log(`[PDF Parser] "${file.name}": ${total} halaman, ${result.length} karakter terbaca`);
+  if (result.length < 100) {
+    console.warn(`[PDF Parser] ⚠️ Teks sangat sedikit — kemungkinan PDF ini berupa scan/gambar dan tidak bisa dibaca teksnya.`);
+  }
+  return result;
 }
 
 async function handlePdfUpload(input) {
@@ -2648,7 +2847,11 @@ async function processPdfFiles(files) {
         text: text
       };
       appData.pdfDocs.push(doc);
-      showToast(`✅ "${file.name}" berhasil diproses!`, 'success');
+      if (text.length < 100) {
+        showToast(`⚠️ "${file.name}" berhasil diupload tapi teks sangat sedikit (${text.length} karakter). PDF ini kemungkinan berupa scan/gambar — HARA tidak bisa membaca isinya. Gunakan PDF dengan teks yang bisa diseleksi.`, 'error');
+      } else {
+        showToast(`✅ "${file.name}" berhasil diproses (${text.length.toLocaleString()} karakter terbaca)`, 'success');
+      }
     } catch(e) {
       console.error('PDF parse error:', e);
       showToast(`Gagal membaca "${file.name}": ${e.message}`, 'error');
@@ -2673,23 +2876,30 @@ function renderDocEditor() {
     return;
   }
 
-  c.innerHTML = appData.pdfDocs.map((doc, i) => `
-    <div style="display:flex;align-items:center;gap:14px;padding:14px 16px;background:var(--dark2);border:1px solid rgba(255,255,255,0.07);border-radius:12px;margin-bottom:8px;transition:border-color .15s" onmouseover="this.style.borderColor='rgba(255,255,255,0.15)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.07)'">
+  c.innerHTML = appData.pdfDocs.map((doc, i) => {
+    const isEmpty = !doc.text || doc.text.trim().length < 100;
+    const statusBadge = isEmpty
+      ? `<span style="background:rgba(255,92,53,0.12);border:1px solid rgba(255,92,53,0.3);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;color:#FF6B6B" title="PDF ini tidak mengandung teks yang bisa dibaca — kemungkinan berupa scan/gambar">⚠️ Tidak terbaca</span>`
+      : `<span style="background:rgba(168,240,160,0.1);border:1px solid rgba(168,240,160,0.25);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;color:#A8F0A0"><i class="ti ti-brain"></i> Aktif di HARA</span>`;
+    const charInfo = isEmpty
+      ? `<span style="color:#FF6B6B"><i class="ti ti-alert-triangle" style="font-size:10px"></i> PDF scan/gambar — teks tidak terbaca</span>`
+      : `<span><i class="ti ti-file-text" style="font-size:10px"></i> ${doc.charCount?.toLocaleString() || '—'} karakter terbaca</span>`;
+    return `
+    <div style="display:flex;align-items:center;gap:14px;padding:14px 16px;background:var(--dark2);border:1px solid ${isEmpty ? 'rgba(255,92,53,0.25)' : 'rgba(255,255,255,0.07)'};border-radius:12px;margin-bottom:8px;transition:border-color .15s" onmouseover="this.style.borderColor='rgba(255,255,255,0.15)'" onmouseout="this.style.borderColor='${isEmpty ? 'rgba(255,92,53,0.25)' : 'rgba(255,255,255,0.07)'}'">
       <div style="width:44px;height:44px;border-radius:10px;background:rgba(255,92,53,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0">
         <i class="ti ti-file-type-pdf" style="font-size:22px;color:#FF6B6B"></i>
       </div>
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(doc.name)}</div>
         <div style="font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:12px">
-          <span><i class="ti ti-file-text" style="font-size:10px"></i> ${doc.charCount?.toLocaleString() || '—'} karakter terbaca</span>
+          ${charInfo}
           <span><i class="ti ti-database" style="font-size:10px"></i> ${doc.size}</span>
           <span><i class="ti ti-calendar" style="font-size:10px"></i> ${doc.uploadedAt}</span>
         </div>
+        ${isEmpty ? `<div style="font-size:11px;color:#FF6B6B;margin-top:4px">💡 Solusi: buka PDF di Word/Google Docs, lalu ekspor ulang sebagai PDF dengan teks yang bisa diseleksi.</div>` : ''}
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-        <span style="background:rgba(168,240,160,0.1);border:1px solid rgba(168,240,160,0.25);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;color:#A8F0A0">
-          <i class="ti ti-brain"></i> Aktif di HARA
-        </span>
+        ${statusBadge}
         <button onclick="previewDoc(${i})" style="background:var(--dark3);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:var(--muted);cursor:pointer;padding:6px 10px;font-size:12px;transition:all .15s" onmouseover="this.style.color='var(--white)'" onmouseout="this.style.color='var(--muted)'">
           <i class="ti ti-eye"></i>
         </button>
@@ -2697,7 +2907,8 @@ function renderDocEditor() {
           <i class="ti ti-trash"></i>
         </button>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function previewDoc(i) {
@@ -2734,9 +2945,11 @@ function deleteDoc(i) {
 // ── Buat konteks PDF untuk HARA ──
 function getPdfContext() {
   if (!appData.pdfDocs || !appData.pdfDocs.length) return '';
-  return appData.pdfDocs.map(doc =>
-    `=== DOKUMEN: ${doc.name} (diunggah ${doc.uploadedAt}) ===\n${doc.text}\n`
-  ).join('\n');
+  const validDocs = appData.pdfDocs.filter(doc => doc.text && doc.text.trim().length > 0);
+  if (!validDocs.length) return '';
+  return validDocs.map(doc =>
+    `=== DOKUMEN: ${doc.name} (diunggah ${doc.uploadedAt}, ${(doc.text.length).toLocaleString('id-ID')} karakter) ===\n${doc.text}\n`
+  ).join('\n---\n');
 }
 
 // ══════════════════════════════════════════
